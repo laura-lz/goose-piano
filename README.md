@@ -46,3 +46,5 @@ This started as a neat homepage feature for my personal website: a small interac
 - Make the math behind the goose movement (specifically the neck bending to tap keys) better
 - Upload small JSON or MusicXML files for the goose to play
 - Record clips/songs
+
+<img width="709" height="594" alt="Screenshot 2026-06-17 at 12 58 20 PM" src="https://github.com/user-attachments/assets/c89aab12-7abf-4acd-a254-6c15e3545c72" />
