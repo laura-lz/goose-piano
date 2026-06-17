@@ -58,6 +58,7 @@ export function createGoosePianoScene(container) {
   goose.userData.homePosition = goose.position.clone();
   goose.userData.homeRotationY = goose.rotation.y;
   goose.userData.walkKeys = new Set();
+  goose.userData.keepOutBounds = { minX: -2.05, maxX: 1.75, minZ: -2.8, maxZ: 0.52 };
   scene.add(goose);
 
   const { piano, keyMeshes } = createPiano();
@@ -93,6 +94,12 @@ export function createGoosePianoScene(container) {
   });
 
   window.addEventListener('keydown', (event) => {
+    if (event.code === 'Space') {
+      event.preventDefault();
+      startGooseJump(goose);
+      return;
+    }
+
     if (event.key.startsWith('Arrow')) {
       event.preventDefault();
       goose.userData.walkKeys.add(event.key);
@@ -186,11 +193,15 @@ function createGoose() {
   [...bobParts, headPivot, neck, ...walkParts].forEach((part) => {
     part.userData.basePosition = part.position.clone();
     part.userData.baseQuaternion = part.quaternion.clone();
+    part.userData.baseScale = part.scale.clone();
   });
   group.userData.bobParts = bobParts;
   group.userData.walkParts = { leftLeg, rightLeg, leftFoot, rightFoot };
   group.userData.walkPhase = 0;
   group.userData.walkAmount = 0;
+  group.userData.jumpAmount = 0;
+  group.userData.jumpTime = 0;
+  group.userData.isJumping = false;
   group.userData.headPivot = headPivot;
   group.userData.beakOffset = beak.position.clone();
   group.userData.neck = neck;
@@ -427,8 +438,55 @@ function updateGooseWalk(goose, delta) {
   goose.userData.walkAmount = THREE.MathUtils.lerp(goose.userData.walkAmount || 0, isWalking ? 1 : 0, isWalking ? 0.35 : 0.16);
   if (isWalking) {
     move.normalize();
-    goose.position.addScaledVector(move, delta * 1.25);
+    const nextPosition = goose.position.clone().addScaledVector(move, delta * 1.25);
+    goose.position.copy(constrainGoosePosition(nextPosition, goose.userData.keepOutBounds));
     goose.userData.walkPhase = (goose.userData.walkPhase || 0) + delta * 8.2;
+  }
+
+  updateGooseJump(goose, delta);
+}
+
+function constrainGoosePosition(position, bounds) {
+  if (!bounds) return position;
+  const radius = 0.82;
+  const insideX = position.x > bounds.minX - radius && position.x < bounds.maxX + radius;
+  const insideZ = position.z > bounds.minZ - radius && position.z < bounds.maxZ + radius;
+  if (!insideX || !insideZ) return position;
+
+  const leftDistance = Math.abs(position.x - (bounds.minX - radius));
+  const rightDistance = Math.abs(position.x - (bounds.maxX + radius));
+  const frontDistance = Math.abs(position.z - (bounds.maxZ + radius));
+  const backDistance = Math.abs(position.z - (bounds.minZ - radius));
+  const nearest = Math.min(leftDistance, rightDistance, frontDistance, backDistance);
+
+  if (nearest === leftDistance) position.x = bounds.minX - radius;
+  else if (nearest === rightDistance) position.x = bounds.maxX + radius;
+  else if (nearest === frontDistance) position.z = bounds.maxZ + radius;
+  else position.z = bounds.minZ - radius;
+
+  return position;
+}
+
+function startGooseJump(goose) {
+  if (goose.userData.isJumping) return;
+  goose.userData.isJumping = true;
+  goose.userData.jumpTime = 0;
+}
+
+function updateGooseJump(goose, delta) {
+  if (!goose.userData.isJumping) {
+    goose.userData.jumpAmount = THREE.MathUtils.lerp(goose.userData.jumpAmount || 0, 0, 0.28);
+    return;
+  }
+
+  const duration = 0.72;
+  goose.userData.jumpTime += delta;
+  const progress = clamp(goose.userData.jumpTime / duration, 0, 1);
+  goose.userData.jumpAmount = Math.sin(progress * Math.PI);
+
+  if (progress >= 1) {
+    goose.userData.isJumping = false;
+    goose.userData.jumpTime = 0;
   }
 }
 
@@ -437,28 +495,42 @@ function resetGooseHome(goose) {
   goose.rotation.y = goose.userData.homeRotationY;
   goose.userData.walkKeys.clear();
   goose.userData.walkAmount = 0;
+  goose.userData.jumpAmount = 0;
+  goose.userData.jumpTime = 0;
+  goose.userData.isJumping = false;
 }
 
-function animateWalkingLegs(goose, walkAmount, walkPhase) {
+function animateWalkingLegs(goose, walkAmount, walkPhase, jumpAmount) {
   const { leftLeg, rightLeg, leftFoot, rightFoot } = goose.userData.walkParts;
   const leftStep = Math.max(0, Math.sin(walkPhase)) * walkAmount;
   const rightStep = Math.max(0, -Math.sin(walkPhase)) * walkAmount;
 
-  poseWalkingSide(leftLeg, leftFoot, leftStep, -0.08);
-  poseWalkingSide(rightLeg, rightFoot, rightStep, 0.08);
+  poseWalkingSide(leftLeg, leftFoot, leftStep, -0.08, jumpAmount);
+  poseWalkingSide(rightLeg, rightFoot, rightStep, 0.08, jumpAmount);
 }
 
-function poseWalkingSide(leg, foot, stepAmount, outwardTilt) {
+function poseWalkingSide(leg, foot, stepAmount, outwardTilt, jumpAmount) {
   leg.position.copy(leg.userData.basePosition);
   foot.position.copy(foot.userData.basePosition);
   leg.quaternion.copy(leg.userData.baseQuaternion);
   foot.quaternion.copy(foot.userData.baseQuaternion);
+  leg.scale.copy(leg.userData.baseScale);
+  foot.scale.copy(foot.userData.baseScale);
 
   const stride = stepAmount * 0.28;
   const lift = Math.sin(stepAmount * Math.PI) * 0.045;
+  const jumpHeight = jumpAmount * 0.58;
+  const legBaseHalfHeight = leg.userData.basePosition.y - foot.userData.basePosition.y;
+  const baseLegTopY = leg.userData.basePosition.y + legBaseHalfHeight;
+  const legTopY = baseLegTopY + jumpHeight + lift * 0.35;
+  const footY = foot.userData.basePosition.y + jumpHeight * 0.58 + lift;
+  const stretchRatio = (legTopY - footY) / (legBaseHalfHeight * 2);
+
   foot.position.x += stride;
-  foot.position.y += lift;
+  foot.position.y = footY;
+  leg.scale.y = leg.userData.baseScale.y * stretchRatio;
   leg.position.x = foot.position.x;
+  leg.position.y = (legTopY + footY) / 2;
   leg.position.z = foot.position.z;
   leg.rotation.z += outwardTilt * stepAmount;
   foot.rotation.z += outwardTilt * 0.8 * stepAmount;
@@ -467,14 +539,20 @@ function poseWalkingSide(leg, foot, stepAmount, outwardTilt) {
 function animateGoose(goose, time) {
   const walkAmount = goose.userData.walkAmount || 0;
   const walkPhase = goose.userData.walkPhase || 0;
-  const bob = Math.sin(time * 1.8) * 0.035 + Math.abs(Math.sin(walkPhase)) * 0.09 * walkAmount;
+  const jumpAmount = goose.userData.jumpAmount || 0;
+  const jumpProgress = goose.userData.isJumping ? clamp(goose.userData.jumpTime / 0.72, 0, 1) : 0;
+  const jumpHeight = jumpAmount * 0.58;
+  const takeoffLag = -0.12 * Math.sin(clamp(jumpProgress / 0.42, 0, 1) * Math.PI);
+  const peakFloat = 0.1 * Math.sin(clamp((jumpProgress - 0.22) / 0.78, 0, 1) * Math.PI);
+  const headLag = goose.userData.isJumping ? takeoffLag + peakFloat : 0;
+  const bob = Math.sin(time * 1.8) * 0.035 + Math.abs(Math.sin(walkPhase)) * 0.09 * walkAmount + jumpHeight;
   const tapProgress = 1 - goose.userData.tapAmount;
   const tapStrength = goose.userData.tapTarget ? Math.sin(clamp(tapProgress, 0, 1) * Math.PI) : 0;
   const lookProgress = clamp(tapProgress + 0.34, 0, 1);
   const lookStrength = goose.userData.tapTarget ? Math.min(1, lookProgress / 0.18) * (1 - Math.pow(lookProgress, 3) * 0.28) : 0;
   const headBase = goose.userData.headPivot.userData.basePosition.clone();
   headBase.x += Math.sin(walkPhase + Math.PI) * 0.07 * walkAmount;
-  headBase.y += bob * 0.5 + Math.max(0, -Math.sin(walkPhase)) * 0.05 * walkAmount;
+  headBase.y += bob * 0.5 + Math.max(0, -Math.sin(walkPhase)) * 0.05 * walkAmount + headLag;
   const headTarget = goose.userData.tapTarget || headBase;
   const headPosition = headBase.lerp(headTarget, tapStrength);
   const yawAngle = clamp(goose.userData.tapYaw || 0, -0.82, 0.82) * lookStrength;
@@ -493,7 +571,7 @@ function animateGoose(goose, time) {
   goose.userData.headPivot.quaternion.copy(headQuaternion).multiply(goose.userData.headPivot.userData.baseQuaternion);
 
   updateNeckPose(goose, neckPose);
-  animateWalkingLegs(goose, walkAmount, walkPhase);
+  animateWalkingLegs(goose, walkAmount, walkPhase, jumpAmount);
 
   goose.userData.tapAmount = Math.max(0, goose.userData.tapAmount - 0.045);
   if (goose.userData.tapAmount === 0) {
