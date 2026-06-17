@@ -23,7 +23,7 @@ const NOTE_COLORS = {
 
 export function createGoosePianoScene(container) {
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color('#050505');
+  scene.background = new THREE.Color('#ffffff');
 
   const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 100);
   camera.position.set(0, 3.3, 8.5);
@@ -146,7 +146,7 @@ function addLights(scene) {
 function addFloor(scene) {
   const floor = new THREE.Mesh(
     new THREE.CircleGeometry(4.4, 80),
-    new THREE.MeshStandardMaterial({ color: '#080808', roughness: 0.75 })
+    new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.75 })
   );
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
@@ -662,12 +662,11 @@ function clamp(value, min, max) {
 
 function addColorCloud(scene, particles, note, origin) {
   const cloud = new THREE.Group();
-  const color = NOTE_COLORS[note] || '#c8dce3';
+  const color = note === 'D' ? '#d7e3e8' : NOTE_COLORS[note] || '#c8dce3';
   const material = new THREE.MeshBasicMaterial({
     color,
     transparent: true,
-    opacity: note === 'D' ? 0.16 : 0.28,
-    blending: THREE.AdditiveBlending,
+    opacity: note === 'D' ? 0.26 : 0.38,
     depthWrite: false
   });
 

@@ -21,7 +21,7 @@ export function preloadNotes() {
     if (audioPools.has(noteName)) return;
 
     const pool = Array.from({ length: poolSize }, () => {
-      const audio = new Audio(`/sounds/${fileName}`);
+      const audio = new Audio(new URL(`sounds/${fileName}`, window.location.href));
       audio.preload = 'auto';
       audio.volume = 0.72;
       return audio;

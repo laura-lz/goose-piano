@@ -1,6 +1,6 @@
 # Goose Piano
 
-An interactive Three.js toy: a goose plays a tiny grand piano, note colors float above the keys, and the goose can wander around with the arrow keys before snapping back to perform.
+A Three.js goose plays a tiny grand piano, note colors float above the keys, and the goose can wander around with the arrow keys before snapping back to perform.
 
 ## Running locally
 
@@ -8,6 +8,18 @@ An interactive Three.js toy: a goose plays a tiny grand piano, note colors float
 npm install
 npm run dev
 ```
+
+## Syncing to a website
+
+After changing the scene, build and copy it into a website folder:
+
+```bash
+npm run sync-site -- ../your-site/assets/goose-piano
+```
+
+The target folder should be the folder loaded by the website iframe.
+
+You can also set `GOOSE_PIANO_SYNC_TARGET` instead of passing the path each time.
 
 ## Controls
 
