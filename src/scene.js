@@ -26,7 +26,7 @@ export function createGoosePianoScene(container) {
   scene.background = new THREE.Color('#ffffff');
 
   const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 100);
-  camera.position.set(0, 3.3, 8.5);
+  camera.position.set(8.3, 5.3, 2.3);
   camera.lookAt(0, 1.2, 0);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
