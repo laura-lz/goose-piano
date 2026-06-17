@@ -44,21 +44,16 @@ export function createGoosePianoScene(container) {
   controls.maxDistance = 12;
   controls.maxPolarAngle = Math.PI * 0.48;
 
-  const label = document.createElement('div');
-  label.className = 'scene-label';
-  label.innerHTML = '<strong>goose piano sketch</strong>click the keys or use A through ;';
-  container.appendChild(label);
-
   addLights(scene);
   addFloor(scene);
 
   const goose = createGoose();
-  goose.position.set(-0.17, -0.02, 1.58);
+  goose.position.set(-0.17, -0.02, 1.04);
   goose.rotation.y = Math.PI / 2;
   goose.userData.homePosition = goose.position.clone();
   goose.userData.homeRotationY = goose.rotation.y;
   goose.userData.walkKeys = new Set();
-  goose.userData.keepOutBounds = { minX: -2.05, maxX: 1.75, minZ: -2.8, maxZ: 0.52 };
+  goose.userData.keepOutBounds = { minX: -2.05, maxX: 1.75, minZ: -2.8, maxZ: 0.36 };
   scene.add(goose);
 
   const { piano, keyMeshes } = createPiano();
@@ -77,7 +72,7 @@ export function createGoosePianoScene(container) {
     if (!key || !note) return;
 
     const octaveOffset = noteIndex >= 12 ? 1 : 0;
-    const keyPosition = key.getWorldPosition(new THREE.Vector3());
+    const keyPosition = getKeyTapPoint(key);
     playNote(note, octaveOffset);
     animateKey(key);
     addColorCloud(scene, particles, note, keyPosition);
@@ -169,7 +164,7 @@ function createGoose() {
 
   const body = mesh(new THREE.SphereGeometry(1, 18, 14), white, [-0.15, 0.95, 0], [1.25, 0.82, 0.82]);
   const belly = mesh(new THREE.SphereGeometry(0.72, 18, 12), shade, [-0.36, 0.8, 0.05], [1, 0.58, 0.62]);
-  const tail = mesh(new THREE.ConeGeometry(0.32, 0.55, 6), white, [-1.2, 1.04, 0], [1, 1, 1], [0, 0, Math.PI / 2]);
+  const tail = mesh(new THREE.ConeGeometry(0.4, 0.72, 6), white, [-1.28, 1.06, 0], [1, 1, 1], [0, 0, Math.PI / 2]);
   const neck = createCurvedNeckMesh(white);
   const head = mesh(new THREE.SphereGeometry(0.43, 18, 14), white, [0.95, 2.55, 0], [1, 0.82, 0.82]);
   const beak = mesh(new THREE.SphereGeometry(0.28, 18, 12), orange, [1.34, 2.5, 0], [1.15, 0.46, 0.62]);
@@ -188,6 +183,9 @@ function createGoose() {
     headPivot.add(part);
   });
 
+  const upperBody = new THREE.Group();
+  upperBody.add(body, belly, tail, neck, headPivot);
+
   const bobParts = [body, belly, tail];
   const walkParts = [leftLeg, rightLeg, leftFoot, rightFoot];
   [...bobParts, headPivot, neck, ...walkParts].forEach((part) => {
@@ -202,16 +200,17 @@ function createGoose() {
   group.userData.jumpAmount = 0;
   group.userData.jumpTime = 0;
   group.userData.isJumping = false;
+  group.userData.upperBody = upperBody;
   group.userData.headPivot = headPivot;
-  group.userData.beakOffset = beak.position.clone();
+  group.userData.beakTipOffset = beak.position.clone().add(new THREE.Vector3(0.32, -0.01, 0));
   group.userData.neck = neck;
-  group.userData.neckRoot = new THREE.Vector3(0.55, 1.34, 0);
-  group.userData.neckControl = new THREE.Vector3(0.76, 1.98, 0);
+  group.userData.neckRoot = new THREE.Vector3(0.52, 1.3, 0);
   group.userData.tapAmount = 0;
   group.userData.tapTarget = null;
   group.userData.tapYaw = 0;
+  group.userData.tapBodyYaw = 0;
 
-  group.add(body, belly, tail, neck, headPivot, leftLeg, rightLeg, leftFoot, rightFoot);
+  group.add(upperBody, leftLeg, rightLeg, leftFoot, rightFoot);
   group.traverse((child) => {
     if (child.isMesh) {
       child.castShadow = true;
@@ -234,12 +233,13 @@ function createPiano() {
   const keyRangeWidth = whiteKeyCount * whiteWidth;
   const pianoWidth = keyRangeWidth + 0.28;
   const startX = -keyRangeWidth / 2 + whiteWidth / 2;
+  const pianoLift = 0.17;
 
   const grandBody = createClosedGrandBody(pianoWidth + 0.22, 1.7, wood, darkWood);
-  grandBody.position.set(0, 1.22, -0.7);
-  const keyBed = mesh(new THREE.BoxGeometry(pianoWidth + 0.16, 0.32, 1.06), darkWood, [0, 0.69, 0.215]);
+  grandBody.position.set(0, 1.22 + pianoLift, -0.7);
+  const keyBed = mesh(new THREE.BoxGeometry(pianoWidth + 0.16, 0.32, 1.06), darkWood, [0, 0.69 + pianoLift, 0.215]);
   const sideWallHeight = 0.36;
-  const sideWallY = 0.98;
+  const sideWallY = 0.98 + pianoLift;
   const sideWallX = keyRangeWidth / 2 + 0.09;
   const leftKeyWall = mesh(new THREE.BoxGeometry(0.12, sideWallHeight, 0.86), wood, [-sideWallX, sideWallY, 0.3]);
   const rightKeyWall = mesh(new THREE.BoxGeometry(0.12, sideWallHeight, 1.0), wood, [sideWallX, sideWallY, 0.23]);
@@ -247,10 +247,12 @@ function createPiano() {
   const frontZ = 0.62;
   const rearLegX = -pianoWidth * 0.28;
   const rearLegZ = -1.45;
+  const legHeight = 0.88 + pianoLift;
+  const legY = 0.385 + pianoLift / 2;
   const legs = [
-    mesh(new THREE.BoxGeometry(0.14, 0.88, 0.14), darkWood, [-legX, 0.385, frontZ]),
-    mesh(new THREE.BoxGeometry(0.14, 0.88, 0.14), darkWood, [legX, 0.385, frontZ]),
-    mesh(new THREE.BoxGeometry(0.14, 0.88, 0.14), darkWood, [rearLegX, 0.385, rearLegZ])
+    mesh(new THREE.BoxGeometry(0.14, legHeight, 0.14), darkWood, [-legX, legY, frontZ]),
+    mesh(new THREE.BoxGeometry(0.14, legHeight, 0.14), darkWood, [legX, legY, frontZ]),
+    mesh(new THREE.BoxGeometry(0.14, legHeight, 0.14), darkWood, [rearLegX, legY, rearLegZ])
   ];
   piano.add(grandBody, keyBed, leftKeyWall, rightKeyWall, ...legs);
 
@@ -267,8 +269,8 @@ function createPiano() {
   notePositions
     .filter(({ isBlack }) => !isBlack)
     .forEach(({ note, noteIndex, x }) => {
-      const key = mesh(new THREE.BoxGeometry(whiteWidth * 0.92, 0.13, 0.78), white, [x, 0.92, 0.3]);
-      key.userData = { note, noteIndex, baseY: 0.92 };
+      const key = mesh(new THREE.BoxGeometry(whiteWidth * 0.92, 0.13, 0.78), white, [x, 0.92 + pianoLift, 0.3]);
+      key.userData = { note, noteIndex, baseY: 0.92 + pianoLift, height: 0.13, depth: 0.78 };
       piano.add(key);
       keyMeshes[noteIndex] = key;
     });
@@ -276,8 +278,8 @@ function createPiano() {
   notePositions
     .filter(({ isBlack }) => isBlack)
     .forEach(({ note, noteIndex, x }) => {
-      const key = mesh(new THREE.BoxGeometry(whiteWidth * 0.58, 0.16, 0.48), black, [x, 1.04, 0.12]);
-      key.userData = { note, noteIndex, baseY: 1.04 };
+      const key = mesh(new THREE.BoxGeometry(whiteWidth * 0.58, 0.16, 0.48), black, [x, 1.04 + pianoLift, 0.12]);
+      key.userData = { note, noteIndex, baseY: 1.04 + pianoLift, height: 0.16, depth: 0.48 };
       piano.add(key);
       keyMeshes[noteIndex] = key;
     });
@@ -298,30 +300,18 @@ function createPiano() {
 function createCurvedNeckMesh(material) {
   return new THREE.Mesh(
     createCurvedNeckGeometry(
-      new THREE.Vector3(0.55, 1.34, 0),
-      new THREE.Vector3(0.76, 1.98, 0),
+      new THREE.Vector3(0.52, 1.3, 0),
+      new THREE.Vector3(0.6, 1.78, 0),
+      new THREE.Vector3(0.74, 2.08, 0),
       new THREE.Vector3(0.77, 2.35, 0)
     ),
     material
   );
 }
 
-function createCurvedNeckGeometry(root, control, headAnchor) {
-  const curve = new THREE.QuadraticBezierCurve3(root, getCurvedNeckControl(root, control, headAnchor), headAnchor);
+function createCurvedNeckGeometry(root, lowerControl, upperControl, headAnchor) {
+  const curve = new THREE.CubicBezierCurve3(root, lowerControl, upperControl, headAnchor);
   return new THREE.TubeGeometry(curve, 32, 0.2, 16, false);
-}
-
-function getCurvedNeckControl(root, control, headAnchor) {
-  const restHeadAnchor = new THREE.Vector3(0.77, 2.35, 0);
-  const bendStrength = clamp(headAnchor.distanceTo(restHeadAnchor) / 0.9, 0, 1);
-  const controlPoint = root.clone().lerp(headAnchor, 0.88);
-
-  controlPoint.lerp(control, 0.14 * (1 - bendStrength));
-  controlPoint.x -= 0.42 * bendStrength;
-  controlPoint.y -= 0.28 * bendStrength;
-  controlPoint.z = THREE.MathUtils.lerp(controlPoint.z, headAnchor.z, 0.65 * bendStrength);
-
-  return controlPoint;
 }
 
 function createTrapezoidFootGeometry(length, height, heelWidth, toeWidth) {
@@ -409,17 +399,27 @@ function animateKey(key) {
   }, 95);
 }
 
+function getKeyTapPoint(key) {
+  const height = key.userData.height ?? 0.13;
+  const depth = key.userData.depth ?? 0.78;
+  const localTapPoint = new THREE.Vector3(0, height / 2 + 0.015, depth / 2 - 0.06);
+  return key.localToWorld(localTapPoint);
+}
+
 function setGooseTapTarget(goose, keyWorldPosition) {
-  const target = goose.worldToLocal(keyWorldPosition.clone());
-  const sideOffset = clamp(target.z, -0.9, 0.9);
-  const beakOffset = goose.userData.beakOffset;
-  const headTarget = target.sub(beakOffset);
-  headTarget.x = clamp(headTarget.x, 1.05, 1.95);
-  headTarget.y = clamp(headTarget.y + 0.18, 1.48, 2.1);
-  headTarget.z = clamp(headTarget.z, -0.72, 0.72);
+  const gooseLocalTarget = goose.worldToLocal(keyWorldPosition.clone());
+  const sideOffset = clamp(gooseLocalTarget.z, -0.9, 0.9);
+  const tapYaw = -sideOffset * 1.1;
+  const tapBodyYaw = -sideOffset * 0.2;
+  const contactBodyYaw = tapBodyYaw * Math.sin(clamp(0.5 + 0.18, 0, 1) * Math.PI);
+  const desiredTipPosition = gooseLocalTarget
+    .clone()
+    .applyAxisAngle(new THREE.Vector3(0, 1, 0), -contactBodyYaw);
+  const headTarget = solveTapHeadTarget(goose, desiredTipPosition, tapYaw);
 
   goose.userData.tapTarget = headTarget;
-  goose.userData.tapYaw = -sideOffset * 1.15;
+  goose.userData.tapYaw = tapYaw;
+  goose.userData.tapBodyYaw = tapBodyYaw;
   goose.userData.tapAmount = 1;
 }
 
@@ -448,7 +448,7 @@ function updateGooseWalk(goose, delta) {
 
 function constrainGoosePosition(position, bounds) {
   if (!bounds) return position;
-  const radius = 0.82;
+  const radius = 0.72;
   const insideX = position.x > bounds.minX - radius && position.x < bounds.maxX + radius;
   const insideZ = position.z > bounds.minZ - radius && position.z < bounds.maxZ + radius;
   if (!insideX || !insideZ) return position;
@@ -493,6 +493,8 @@ function updateGooseJump(goose, delta) {
 function resetGooseHome(goose) {
   goose.position.copy(goose.userData.homePosition);
   goose.rotation.y = goose.userData.homeRotationY;
+  goose.userData.upperBody.rotation.y = 0;
+  goose.userData.tapBodyYaw = 0;
   goose.userData.walkKeys.clear();
   goose.userData.walkAmount = 0;
   goose.userData.jumpAmount = 0;
@@ -547,20 +549,19 @@ function animateGoose(goose, time) {
   const headLag = goose.userData.isJumping ? takeoffLag + peakFloat : 0;
   const bob = Math.sin(time * 1.8) * 0.035 + Math.abs(Math.sin(walkPhase)) * 0.09 * walkAmount + jumpHeight;
   const tapProgress = 1 - goose.userData.tapAmount;
-  const tapStrength = goose.userData.tapTarget ? Math.sin(clamp(tapProgress, 0, 1) * Math.PI) : 0;
-  const lookProgress = clamp(tapProgress + 0.34, 0, 1);
-  const lookStrength = goose.userData.tapTarget ? Math.min(1, lookProgress / 0.18) * (1 - Math.pow(lookProgress, 3) * 0.28) : 0;
+  const tapStrength = goose.userData.tapTarget ? getTapStrength(tapProgress) : 0;
+  const bodyTurnStrength = goose.userData.tapTarget ? getTapStrength(clamp(tapProgress + 0.14, 0, 1)) : 0;
+  goose.userData.upperBody.rotation.y = clamp(goose.userData.tapBodyYaw || 0, -0.22, 0.22) * bodyTurnStrength;
+  const lookStrength = goose.userData.tapTarget ? smoothstep(clamp(tapProgress / 0.18, 0, 1)) : 0;
   const headBase = goose.userData.headPivot.userData.basePosition.clone();
   headBase.x += Math.sin(walkPhase + Math.PI) * 0.07 * walkAmount;
   headBase.y += bob * 0.5 + Math.max(0, -Math.sin(walkPhase)) * 0.05 * walkAmount + headLag;
   const headTarget = goose.userData.tapTarget || headBase;
-  const headPosition = headBase.lerp(headTarget, tapStrength);
+  let headPosition = headBase.lerp(headTarget, tapStrength);
   const yawAngle = clamp(goose.userData.tapYaw || 0, -0.82, 0.82) * lookStrength;
-  const neckPose = getNeckPose(goose, bob, headPosition);
-  const headAxis = neckPose.tangent;
-  const neckQuaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), headAxis);
-  const yawQuaternion = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yawAngle);
-  const headQuaternion = neckQuaternion.multiply(yawQuaternion);
+  const neckPose = getNeckPose(goose, bob, headPosition, tapStrength);
+  const headAxis = getHeadAxis(neckPose.tangent, tapStrength);
+  const headQuaternion = getHeadQuaternion(headAxis, yawAngle);
 
   goose.userData.bobParts.forEach((part) => {
     part.position.copy(part.userData.basePosition);
@@ -577,30 +578,80 @@ function animateGoose(goose, time) {
   if (goose.userData.tapAmount === 0) {
     goose.userData.tapTarget = null;
     goose.userData.tapYaw = 0;
+    goose.userData.tapBodyYaw = 0;
+    goose.userData.upperBody.rotation.y = 0;
   }
 }
 
-function getNeckPose(goose, bob, headPosition) {
+function solveTapHeadTarget(goose, desiredTipPosition, yawAngle) {
+  let headPosition = desiredTipPosition.clone().sub(goose.userData.beakTipOffset);
+  headPosition.x = clamp(headPosition.x, 0.82, 2.16);
+  headPosition.y = clamp(headPosition.y + 0.02, 1.14, 2.18);
+  headPosition.z = clamp(headPosition.z, -0.82, 0.82);
+
+  for (let i = 0; i < 5; i += 1) {
+    const neckPose = getNeckPose(goose, 0, headPosition, 1);
+    const headAxis = getHeadAxis(neckPose.tangent, 1);
+    const headQuaternion = getHeadQuaternion(headAxis, yawAngle).multiply(goose.userData.headPivot.userData.baseQuaternion);
+    const actualTipPosition = headPosition.clone().add(
+      goose.userData.beakTipOffset.clone().applyQuaternion(headQuaternion)
+    );
+    headPosition.add(desiredTipPosition.clone().sub(actualTipPosition));
+    headPosition.x = clamp(headPosition.x, 0.82, 2.16);
+    headPosition.y = clamp(headPosition.y, 1.14, 2.18);
+    headPosition.z = clamp(headPosition.z, -0.82, 0.82);
+  }
+
+  return headPosition;
+}
+
+function getTapStrength(progress) {
+  const amount = clamp(progress, 0, 1);
+  if (amount < 0.38) return smoothstep(amount / 0.38);
+  if (amount < 0.6) return 1;
+  return 1 - smoothstep((amount - 0.6) / 0.4);
+}
+
+function getNeckPose(goose, bob, headPosition, bendOverride = null) {
   const root = goose.userData.neckRoot.clone();
-  const control = goose.userData.neckControl.clone();
   const tapProgress = 1 - goose.userData.tapAmount;
-  const bendAmount = goose.userData.tapTarget ? Math.sin(clamp(tapProgress, 0, 1) * Math.PI) : 0;
-  root.y += bob * 0.75;
-  control.y += bob * 0.6;
+  const bendAmount = bendOverride ?? (goose.userData.tapTarget ? Math.sin(clamp(tapProgress, 0, 1) * Math.PI) : 0);
+  root.y += bob * 0.36;
 
   const headAnchor = headPosition.clone().add(new THREE.Vector3(-0.16, -0.2, 0));
-  control.x += (headAnchor.x - control.x) * 0.04 * bendAmount;
-  control.y -= 0.03 * bendAmount;
-  control.z += (headAnchor.z - control.z) * 0.06 * bendAmount;
+  const lowerControl = root.clone().lerp(headAnchor, 0.24);
+  lowerControl.x = THREE.MathUtils.lerp(lowerControl.x, root.x + 0.04, bendAmount * 0.45);
+  lowerControl.y += 0.1 + 0.04 * bendAmount;
+  lowerControl.z = THREE.MathUtils.lerp(lowerControl.z, headAnchor.z * 0.14, bendAmount * 0.55);
 
-  const neckControl = getCurvedNeckControl(root, control, headAnchor);
-  const tangent = headAnchor.clone().sub(neckControl).normalize();
-  return { root, control, headAnchor, tangent };
+  const upperControl = root.clone().lerp(headAnchor, 0.86);
+  upperControl.x -= 0.34 * bendAmount;
+  upperControl.y += 0.42 * bendAmount;
+  upperControl.z = THREE.MathUtils.lerp(upperControl.z, headAnchor.z * 0.82, bendAmount * 0.9);
+
+  const curve = new THREE.CubicBezierCurve3(root, lowerControl, upperControl, headAnchor);
+  const tangent = curve.getTangent(1).normalize();
+  return { root, lowerControl, upperControl, headAnchor, tangent };
+}
+
+function getHeadAxis(neckTangent, tapStrength) {
+  return neckTangent.clone().lerp(new THREE.Vector3(-0.18, 1, 0), 0.22 * tapStrength).normalize();
+}
+
+function getHeadQuaternion(headAxis, yawAngle) {
+  const neckQuaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), headAxis);
+  const yawQuaternion = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yawAngle);
+  return neckQuaternion.multiply(yawQuaternion);
+}
+
+function smoothstep(value) {
+  const amount = clamp(value, 0, 1);
+  return amount * amount * (3 - 2 * amount);
 }
 
 function updateNeckPose(goose, neckPose) {
   const neck = goose.userData.neck;
-  const nextGeometry = createCurvedNeckGeometry(neckPose.root, neckPose.control, neckPose.headAnchor);
+  const nextGeometry = createCurvedNeckGeometry(neckPose.root, neckPose.lowerControl, neckPose.upperControl, neckPose.headAnchor);
   neck.geometry.dispose();
   neck.geometry = nextGeometry;
 }
