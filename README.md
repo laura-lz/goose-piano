@@ -19,14 +19,14 @@ npm run sync-site -- ../your-site/assets/goose-piano
 
 The target folder should be the folder loaded by the website iframe.
 
-You can also set `GOOSE_PIANO_SYNC_TARGET` instead of passing the path each time.
+You can also set `GOOSE_PIANO_SYNC_TARGET` as an environment variable instead of passing the path each time.
 
 ## Controls
 
 - Click piano keys or use `A W S E D F T G Y H U J K O L P ;` to play notes. The lower row is white keys ranging from C4 to E5; the upper row is black keys ranging from C#4 to Eb5.
 - Use arrow keys and space bar to walk the goose around.
 - Playing a note returns the goose to the piano before the beak tap animation.
-- Drag to orbit the scene and scroll to zoom.
+- Click and drag to orbit the scene and scroll to zoom.
 
 ## Project structure
 
@@ -35,6 +35,7 @@ You can also set `GOOSE_PIANO_SYNC_TARGET` instead of passing the path each time
 - `src/audio.js`: note sound loading/playback.
 - `src/style.css`: page/canvas styling.
 - `public/sounds/`: piano note mp3 files.
+- scripts/: handles sync updates to another repo (if applicable).
 
 ## Why this exists
 
@@ -46,3 +47,6 @@ This started as a neat homepage feature for my personal website: a small interac
 - Make the math behind the goose movement (specifically the neck bending to tap keys) better
 - Upload small JSON or MusicXML files for the goose to play
 - Record clips/songs
+- Make goose movement functional on mobile web
+
+<img width="709" height="594" alt="Screenshot 2026-06-17 at 12 58 20 PM" src="https://github.com/user-attachments/assets/c89aab12-7abf-4acd-a254-6c15e3545c72" />
