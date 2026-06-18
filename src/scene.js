@@ -20,6 +20,9 @@ const NOTE_COLORS = {
   Bb: '#222288',
   B: '#3737e2'
 };
+const TAP_DURATION = 0.32;
+const TAP_HOLD_START = 0.38;
+const TAP_HOLD_END = 0.6;
 
 export function createGoosePianoScene(container) {
   const scene = new THREE.Scene();
@@ -122,7 +125,7 @@ export function createGoosePianoScene(container) {
     const delta = clock.getDelta();
     const time = clock.elapsedTime;
     updateGooseWalk(goose, delta);
-    animateGoose(goose, time);
+    animateGoose(goose, time, delta);
     updateParticles(scene, particles);
     controls.update();
     renderer.render(scene, camera);
@@ -136,6 +139,13 @@ function addLights(scene) {
   key.position.set(3.5, 5, 4);
   key.castShadow = true;
   key.shadow.mapSize.set(2048, 2048);
+  key.shadow.camera.left = -7;
+  key.shadow.camera.right = 7;
+  key.shadow.camera.top = 7;
+  key.shadow.camera.bottom = -7;
+  key.shadow.camera.near = 0.5;
+  key.shadow.camera.far = 18;
+  key.shadow.camera.updateProjectionMatrix();
   scene.add(key);
 
   const fill = new THREE.DirectionalLight('#cde7ed', 0.9);
@@ -205,10 +215,12 @@ function createGoose() {
   group.userData.beakTipOffset = beak.position.clone().add(new THREE.Vector3(0.32, -0.01, 0));
   group.userData.neck = neck;
   group.userData.neckRoot = new THREE.Vector3(0.52, 1.3, 0);
-  group.userData.tapAmount = 0;
   group.userData.tapTarget = null;
+  group.userData.tapTime = 0;
+  group.userData.tapDuration = TAP_DURATION;
   group.userData.tapYaw = 0;
   group.userData.tapBodyYaw = 0;
+  group.userData.restNeckPose = getNeckPose(group, 0, headPivot.position.clone(), 0);
 
   group.add(upperBody, leftLeg, rightLeg, leftFoot, rightFoot);
   group.traverse((child) => {
@@ -420,7 +432,7 @@ function setGooseTapTarget(goose, keyWorldPosition) {
   goose.userData.tapTarget = headTarget;
   goose.userData.tapYaw = tapYaw;
   goose.userData.tapBodyYaw = tapBodyYaw;
-  goose.userData.tapAmount = 1;
+  goose.userData.tapTime = 0;
 }
 
 
@@ -494,6 +506,7 @@ function resetGooseHome(goose) {
   goose.position.copy(goose.userData.homePosition);
   goose.rotation.y = goose.userData.homeRotationY;
   goose.userData.upperBody.rotation.y = 0;
+  goose.userData.tapTime = 0;
   goose.userData.tapBodyYaw = 0;
   goose.userData.walkKeys.clear();
   goose.userData.walkAmount = 0;
@@ -538,28 +551,29 @@ function poseWalkingSide(leg, foot, stepAmount, outwardTilt, jumpAmount) {
   foot.rotation.z += outwardTilt * 0.8 * stepAmount;
 }
 
-function animateGoose(goose, time) {
+function animateGoose(goose, time, delta) {
   const walkAmount = goose.userData.walkAmount || 0;
   const walkPhase = goose.userData.walkPhase || 0;
   const jumpAmount = goose.userData.jumpAmount || 0;
+  const hasTap = Boolean(goose.userData.tapTarget);
   const jumpProgress = goose.userData.isJumping ? clamp(goose.userData.jumpTime / 0.72, 0, 1) : 0;
   const jumpHeight = jumpAmount * 0.58;
   const takeoffLag = -0.12 * Math.sin(clamp(jumpProgress / 0.42, 0, 1) * Math.PI);
   const peakFloat = 0.1 * Math.sin(clamp((jumpProgress - 0.22) / 0.78, 0, 1) * Math.PI);
   const headLag = goose.userData.isJumping ? takeoffLag + peakFloat : 0;
   const bob = Math.sin(time * 1.8) * 0.035 + Math.abs(Math.sin(walkPhase)) * 0.09 * walkAmount + jumpHeight;
-  const tapProgress = 1 - goose.userData.tapAmount;
-  const tapStrength = goose.userData.tapTarget ? getTapStrength(tapProgress) : 0;
-  const bodyTurnStrength = goose.userData.tapTarget ? getTapStrength(clamp(tapProgress + 0.14, 0, 1)) : 0;
+  const tapProgress = hasTap ? clamp(goose.userData.tapTime / goose.userData.tapDuration, 0, 1) : 0;
+  const tapStrength = hasTap ? getTapStrength(tapProgress) : 0;
+  const bodyTurnStrength = hasTap ? getTapStrength(clamp(tapProgress + 0.14, 0, 1)) : 0;
   goose.userData.upperBody.rotation.y = clamp(goose.userData.tapBodyYaw || 0, -0.22, 0.22) * bodyTurnStrength;
-  const lookStrength = goose.userData.tapTarget ? smoothstep(clamp(tapProgress / 0.18, 0, 1)) : 0;
+  const lookStrength = hasTap ? smoothstep(clamp(tapProgress / 0.18, 0, 1)) : 0;
   const headBase = goose.userData.headPivot.userData.basePosition.clone();
   headBase.x += Math.sin(walkPhase + Math.PI) * 0.07 * walkAmount;
   headBase.y += bob * 0.5 + Math.max(0, -Math.sin(walkPhase)) * 0.05 * walkAmount + headLag;
   const headTarget = goose.userData.tapTarget || headBase;
-  let headPosition = headBase.lerp(headTarget, tapStrength);
+  const headPosition = headBase.lerp(headTarget, tapStrength);
   const yawAngle = clamp(goose.userData.tapYaw || 0, -0.82, 0.82) * lookStrength;
-  const neckPose = getNeckPose(goose, bob, headPosition, tapStrength);
+  const neckPose = hasTap ? getNeckPose(goose, bob, headPosition, tapStrength) : goose.userData.restNeckPose;
   const headAxis = getHeadAxis(neckPose.tangent, tapStrength);
   const headQuaternion = getHeadQuaternion(headAxis, yawAngle);
 
@@ -571,15 +585,17 @@ function animateGoose(goose, time) {
   goose.userData.headPivot.position.copy(headPosition);
   goose.userData.headPivot.quaternion.copy(headQuaternion).multiply(goose.userData.headPivot.userData.baseQuaternion);
 
-  updateNeckPose(goose, neckPose);
+  if (hasTap) updateNeckPose(goose, neckPose);
   animateWalkingLegs(goose, walkAmount, walkPhase, jumpAmount);
 
-  goose.userData.tapAmount = Math.max(0, goose.userData.tapAmount - 0.045);
-  if (goose.userData.tapAmount === 0) {
+  if (hasTap) goose.userData.tapTime += delta;
+  if (hasTap && goose.userData.tapTime >= goose.userData.tapDuration) {
     goose.userData.tapTarget = null;
+    goose.userData.tapTime = 0;
     goose.userData.tapYaw = 0;
     goose.userData.tapBodyYaw = 0;
     goose.userData.upperBody.rotation.y = 0;
+    updateNeckPose(goose, goose.userData.restNeckPose);
   }
 }
 
@@ -607,15 +623,14 @@ function solveTapHeadTarget(goose, desiredTipPosition, yawAngle) {
 
 function getTapStrength(progress) {
   const amount = clamp(progress, 0, 1);
-  if (amount < 0.38) return smoothstep(amount / 0.38);
-  if (amount < 0.6) return 1;
-  return 1 - smoothstep((amount - 0.6) / 0.4);
+  if (amount < TAP_HOLD_START) return smoothstep(amount / TAP_HOLD_START);
+  if (amount < TAP_HOLD_END) return 1;
+  return 1 - smoothstep((amount - TAP_HOLD_END) / (1 - TAP_HOLD_END));
 }
 
 function getNeckPose(goose, bob, headPosition, bendOverride = null) {
   const root = goose.userData.neckRoot.clone();
-  const tapProgress = 1 - goose.userData.tapAmount;
-  const bendAmount = bendOverride ?? (goose.userData.tapTarget ? Math.sin(clamp(tapProgress, 0, 1) * Math.PI) : 0);
+  const bendAmount = bendOverride ?? 0;
   root.y += bob * 0.36;
 
   const headAnchor = headPosition.clone().add(new THREE.Vector3(-0.16, -0.2, 0));
