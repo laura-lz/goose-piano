@@ -23,6 +23,14 @@ const NOTE_COLORS = {
 const TAP_DURATION = 0.32;
 const TAP_HOLD_START = 0.38;
 const TAP_HOLD_END = 0.6;
+const MAX_COLOR_CLOUDS = 18;
+const COLOR_CLOUD_TTL = 0.95;
+const CLOUD_PUFF_GEOMETRY = new THREE.SphereGeometry(1, 14, 10);
+const NECK_CACHE_STEPS = 18;
+const HIGH_QUALITY_PIXEL_RATIO = 2;
+const LOW_QUALITY_PIXEL_RATIO = 1.5;
+const LOW_FPS_THRESHOLD = 24;
+const LOW_FPS_SAMPLE_SECONDS = 2.5;
 
 export function createGoosePianoScene(container) {
   const scene = new THREE.Scene();
@@ -32,8 +40,8 @@ export function createGoosePianoScene(container) {
   camera.position.set(5.3, 4.3, 1.3);
   camera.lookAt(0, 1.2, 0);
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, HIGH_QUALITY_PIXEL_RATIO));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -62,6 +70,9 @@ export function createGoosePianoScene(container) {
   const { piano, keyMeshes } = createPiano();
   piano.position.set(-0.2, 0, -0.9);
   scene.add(piano);
+  scene.updateMatrixWorld(true);
+
+  goose.userData.neckGeometryCache = createNeckGeometryCache(goose, keyMeshes);
 
   preloadNotes();
 
@@ -80,7 +91,7 @@ export function createGoosePianoScene(container) {
     animateKey(key);
     addColorCloud(scene, particles, note, keyPosition);
     resetGooseHome(goose);
-    setGooseTapTarget(goose, keyPosition);
+    setGooseTapTarget(goose, keyPosition, noteIndex);
   }
 
   window.addEventListener('pointerdown', (event) => {
@@ -121,12 +132,28 @@ export function createGoosePianoScene(container) {
   });
 
   const clock = new THREE.Clock();
+  let qualitySampleTime = 0;
+  let qualitySampleFrames = 0;
+  let loweredPixelRatio = false;
+
   renderer.setAnimationLoop(() => {
     const delta = clock.getDelta();
     const time = clock.elapsedTime;
+    qualitySampleTime += delta;
+    qualitySampleFrames += 1;
+
+    if (!loweredPixelRatio && qualitySampleTime >= LOW_FPS_SAMPLE_SECONDS) {
+      const averageFps = qualitySampleFrames / qualitySampleTime;
+      if (averageFps < LOW_FPS_THRESHOLD && window.devicePixelRatio > LOW_QUALITY_PIXEL_RATIO) {
+        renderer.setPixelRatio(LOW_QUALITY_PIXEL_RATIO);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        loweredPixelRatio = true;
+      }
+    }
+
     updateGooseWalk(goose, delta);
     animateGoose(goose, time, delta);
-    updateParticles(scene, particles);
+    updateParticles(scene, particles, delta);
     controls.update();
     renderer.render(scene, camera);
   });
@@ -138,7 +165,7 @@ function addLights(scene) {
   const key = new THREE.DirectionalLight('#ffffff', 2.7);
   key.position.set(3.5, 5, 4);
   key.castShadow = true;
-  key.shadow.mapSize.set(2048, 2048);
+  key.shadow.mapSize.set(1024, 1024);
   key.shadow.camera.left = -7;
   key.shadow.camera.right = 7;
   key.shadow.camera.top = 7;
@@ -155,7 +182,7 @@ function addLights(scene) {
 
 function addFloor(scene) {
   const floor = new THREE.Mesh(
-    new THREE.CircleGeometry(4.4, 80),
+    new THREE.CircleGeometry(4.4, 48),
     new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.75 })
   );
   floor.rotation.x = -Math.PI / 2;
@@ -221,6 +248,12 @@ function createGoose() {
   group.userData.tapYaw = 0;
   group.userData.tapBodyYaw = 0;
   group.userData.restNeckPose = getNeckPose(group, 0, headPivot.position.clone(), 0);
+  group.userData.restNeckGeometry = createCurvedNeckGeometry(
+    group.userData.restNeckPose.root,
+    group.userData.restNeckPose.lowerControl,
+    group.userData.restNeckPose.upperControl,
+    group.userData.restNeckPose.headAnchor
+  );
 
   group.add(upperBody, leftLeg, rightLeg, leftFoot, rightFoot);
   group.traverse((child) => {
@@ -323,7 +356,7 @@ function createCurvedNeckMesh(material) {
 
 function createCurvedNeckGeometry(root, lowerControl, upperControl, headAnchor) {
   const curve = new THREE.CubicBezierCurve3(root, lowerControl, upperControl, headAnchor);
-  return new THREE.TubeGeometry(curve, 32, 0.2, 16, false);
+  return new THREE.TubeGeometry(curve, 20, 0.2, 10, false);
 }
 
 function createTrapezoidFootGeometry(length, height, heelWidth, toeWidth) {
@@ -418,7 +451,7 @@ function getKeyTapPoint(key) {
   return key.localToWorld(localTapPoint);
 }
 
-function setGooseTapTarget(goose, keyWorldPosition) {
+function getTapTargetPose(goose, keyWorldPosition) {
   const gooseLocalTarget = goose.worldToLocal(keyWorldPosition.clone());
   const sideOffset = clamp(gooseLocalTarget.z, -0.9, 0.9);
   const tapYaw = -sideOffset * 1.1;
@@ -429,9 +462,16 @@ function setGooseTapTarget(goose, keyWorldPosition) {
     .applyAxisAngle(new THREE.Vector3(0, 1, 0), -contactBodyYaw);
   const headTarget = solveTapHeadTarget(goose, desiredTipPosition, tapYaw);
 
+  return { headTarget, tapYaw, tapBodyYaw };
+}
+
+function setGooseTapTarget(goose, keyWorldPosition, noteIndex) {
+  const { headTarget, tapYaw, tapBodyYaw } = getTapTargetPose(goose, keyWorldPosition);
+
   goose.userData.tapTarget = headTarget;
   goose.userData.tapYaw = tapYaw;
   goose.userData.tapBodyYaw = tapBodyYaw;
+  goose.userData.tapNoteIndex = noteIndex;
   goose.userData.tapTime = 0;
 }
 
@@ -585,7 +625,7 @@ function animateGoose(goose, time, delta) {
   goose.userData.headPivot.position.copy(headPosition);
   goose.userData.headPivot.quaternion.copy(headQuaternion).multiply(goose.userData.headPivot.userData.baseQuaternion);
 
-  if (hasTap) updateNeckPose(goose, neckPose);
+  if (hasTap) useCachedTapNeckGeometry(goose, tapProgress, neckPose);
   animateWalkingLegs(goose, walkAmount, walkPhase, jumpAmount);
 
   if (hasTap) goose.userData.tapTime += delta;
@@ -594,8 +634,9 @@ function animateGoose(goose, time, delta) {
     goose.userData.tapTime = 0;
     goose.userData.tapYaw = 0;
     goose.userData.tapBodyYaw = 0;
+    goose.userData.tapNoteIndex = null;
     goose.userData.upperBody.rotation.y = 0;
-    updateNeckPose(goose, goose.userData.restNeckPose);
+    useNeckGeometry(goose, goose.userData.restNeckGeometry);
   }
 }
 
@@ -664,18 +705,56 @@ function smoothstep(value) {
   return amount * amount * (3 - 2 * amount);
 }
 
+function createNeckGeometryCache(goose, keyMeshes) {
+  const baseHeadPosition = goose.userData.headPivot.userData.basePosition.clone();
+
+  return keyMeshes.map((key) => {
+    if (!key) return [];
+
+    const keyPosition = getKeyTapPoint(key);
+    const { headTarget } = getTapTargetPose(goose, keyPosition);
+
+    return Array.from({ length: NECK_CACHE_STEPS }, (_, step) => {
+      const progress = step / (NECK_CACHE_STEPS - 1);
+      const tapStrength = getTapStrength(progress);
+      const headPosition = baseHeadPosition.clone().lerp(headTarget, tapStrength);
+      const neckPose = getNeckPose(goose, 0, headPosition, tapStrength);
+      return createCurvedNeckGeometry(neckPose.root, neckPose.lowerControl, neckPose.upperControl, neckPose.headAnchor);
+    });
+  });
+}
+
+function useCachedTapNeckGeometry(goose, tapProgress) {
+  const noteCache = goose.userData.neckGeometryCache?.[goose.userData.tapNoteIndex];
+  if (!noteCache?.length) return;
+
+  const frameIndex = Math.min(noteCache.length - 1, Math.round(clamp(tapProgress, 0, 1) * (noteCache.length - 1)));
+  useNeckGeometry(goose, noteCache[frameIndex]);
+}
+
+function useNeckGeometry(goose, geometry) {
+  if (!geometry || goose.userData.neck.geometry === geometry) return;
+  goose.userData.neck.geometry = geometry;
+}
+
+/*
 function updateNeckPose(goose, neckPose) {
   const neck = goose.userData.neck;
   const nextGeometry = createCurvedNeckGeometry(neckPose.root, neckPose.lowerControl, neckPose.upperControl, neckPose.headAnchor);
   neck.geometry.dispose();
   neck.geometry = nextGeometry;
 }
+*/
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
 function addColorCloud(scene, particles, note, origin) {
+  while (particles.length >= MAX_COLOR_CLOUDS) {
+    disposeParticleCloud(scene, particles.shift());
+  }
+
   const cloud = new THREE.Group();
   const color = note === 'D' ? '#d7e3e8' : NOTE_COLORS[note] || '#c8dce3';
   const material = new THREE.MeshBasicMaterial({
@@ -686,16 +765,17 @@ function addColorCloud(scene, particles, note, origin) {
   });
 
   for (let i = 0; i < 5; i += 1) {
-    const puff = new THREE.Mesh(new THREE.SphereGeometry(0.52 + Math.random() * 0.28, 24, 16), material.clone());
+    const radius = 0.52 + Math.random() * 0.28;
+    const puff = new THREE.Mesh(CLOUD_PUFF_GEOMETRY, material.clone());
     puff.position.set(
       (Math.random() - 0.5) * 0.7,
       (Math.random() - 0.5) * 0.28,
       (Math.random() - 0.5) * 0.45
     );
     puff.scale.set(
-      1.1 + Math.random() * 0.7,
-      0.75 + Math.random() * 0.45,
-      0.55 + Math.random() * 0.5
+      radius * (1.1 + Math.random() * 0.7),
+      radius * (0.75 + Math.random() * 0.45),
+      radius * (0.55 + Math.random() * 0.5)
     );
     cloud.add(puff);
   }
@@ -704,43 +784,48 @@ function addColorCloud(scene, particles, note, origin) {
   cloud.position.y += 1.35;
   cloud.position.z -= 0.9;
   cloud.userData.velocity = new THREE.Vector3(
-    (Math.random() - 0.5) * 0.008,
-    0.01 + Math.random() * 0.006,
-    (Math.random() - 0.5) * 0.006
+    (Math.random() - 0.5) * 0.48,
+    0.6 + Math.random() * 0.36,
+    (Math.random() - 0.5) * 0.36
   );
-  cloud.userData.spin = new THREE.Vector3(0, (Math.random() - 0.5) * 0.004, (Math.random() - 0.5) * 0.004);
-  cloud.userData.life = 1;
-  cloud.userData.lifeDecay = 0.016;
-  cloud.userData.growth = 1.012;
+  cloud.userData.spin = new THREE.Vector3(0, (Math.random() - 0.5) * 0.24, (Math.random() - 0.5) * 0.24);
+  cloud.userData.age = 0;
+  cloud.userData.ttl = COLOR_CLOUD_TTL;
+  cloud.userData.growth = 0.72;
   scene.add(cloud);
   particles.push(cloud);
 }
 
-function updateParticles(scene, particles) {
+function updateParticles(scene, particles, delta) {
   for (let i = particles.length - 1; i >= 0; i -= 1) {
     const particle = particles[i];
-    particle.position.add(particle.userData.velocity);
-    particle.rotation.x += particle.userData.spin.x;
-    particle.rotation.y += particle.userData.spin.y;
-    particle.rotation.z += particle.userData.spin.z;
-    particle.userData.life -= particle.userData.lifeDecay ?? 0.014;
+    particle.userData.age += delta;
+    const life = 1 - clamp(particle.userData.age / particle.userData.ttl, 0, 1);
+    particle.position.addScaledVector(particle.userData.velocity, delta);
+    particle.rotation.x += particle.userData.spin.x * delta;
+    particle.rotation.y += particle.userData.spin.y * delta;
+    particle.rotation.z += particle.userData.spin.z * delta;
     particle.traverse((child) => {
       if (child.material) {
         const baseOpacity = child.userData.baseOpacity ?? child.material.opacity;
         child.userData.baseOpacity = baseOpacity;
-        child.material.opacity = Math.max(0, particle.userData.life * baseOpacity);
+        child.material.opacity = Math.max(0, life * baseOpacity);
       }
     });
-    particle.scale.multiplyScalar(particle.userData.growth ?? 1.006);
+    particle.scale.addScalar((particle.userData.growth ?? 0.36) * delta);
 
-    if (particle.userData.life <= 0) {
-      scene.remove(particle);
-      particle.traverse((child) => {
-        if (!child.isMesh) return;
-        child.geometry.dispose();
-        child.material.dispose();
-      });
+    if (life <= 0) {
+      disposeParticleCloud(scene, particle);
       particles.splice(i, 1);
     }
   }
+}
+
+function disposeParticleCloud(scene, particle) {
+  if (!particle) return;
+  scene.remove(particle);
+  particle.traverse((child) => {
+    if (!child.isMesh) return;
+    child.material.dispose();
+  });
 }
