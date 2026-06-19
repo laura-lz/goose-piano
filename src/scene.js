@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { playNote, preloadNotes } from './audio.js';
+import { playNote, preloadNotes, resetAudio, unlockAudio } from './audio.js';
 
 const KEYBOARD = ['a', 'w', 's', 'e', 'd', 'f', 't', 'g', 'y', 'h', 'u', 'j', 'k', 'o', 'l', 'p', ';'];
 const PIANO_NOTES = [
@@ -23,16 +23,22 @@ const NOTE_COLORS = {
 const TAP_DURATION = 0.32;
 const TAP_HOLD_START = 0.38;
 const TAP_HOLD_END = 0.6;
-const MAX_COLOR_CLOUDS = 18;
+const HIGH_QUALITY_COLOR_CLOUDS = 18;
+const LOW_QUALITY_COLOR_CLOUDS = 12;
 const COLOR_CLOUD_TTL = 0.95;
-const CLOUD_PUFF_GEOMETRY = new THREE.SphereGeometry(1, 14, 10);
+const HIGH_QUALITY_CLOUD_PUFF_GEOMETRY = new THREE.SphereGeometry(1, 14, 10);
+const LOW_QUALITY_CLOUD_PUFF_GEOMETRY = new THREE.SphereGeometry(1, 10, 8);
 const NECK_CACHE_STEPS = 18;
+const REST_NECK_CACHE_LIMIT = 80;
 const HIGH_QUALITY_PIXEL_RATIO = 2;
+const SAFARI_PIXEL_RATIO = 1.5;
 const LOW_QUALITY_PIXEL_RATIO = 1.5;
-const LOW_FPS_THRESHOLD = 24;
+const HIGH_QUALITY_LOW_FPS_THRESHOLD = 24;
+const SAFARI_LOW_FPS_THRESHOLD = 30;
 const LOW_FPS_SAMPLE_SECONDS = 2.5;
 
 export function createGoosePianoScene(container) {
+  const isSafari = /^((?!chrome|android).)*safari/i.test(window.navigator.userAgent);
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#ffffff');
 
@@ -40,10 +46,10 @@ export function createGoosePianoScene(container) {
   camera.position.set(5.3, 4.3, 1.3);
   camera.lookAt(0, 1.2, 0);
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, HIGH_QUALITY_PIXEL_RATIO));
+  const renderer = new THREE.WebGLRenderer({ antialias: !isSafari, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, isSafari ? SAFARI_PIXEL_RATIO : HIGH_QUALITY_PIXEL_RATIO));
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.enabled = !isSafari;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   container.appendChild(renderer.domElement);
 
@@ -77,8 +83,13 @@ export function createGoosePianoScene(container) {
   preloadNotes();
 
   const particles = [];
+  const particleQuality = {
+    geometry: isSafari ? LOW_QUALITY_CLOUD_PUFF_GEOMETRY : HIGH_QUALITY_CLOUD_PUFF_GEOMETRY,
+    maxClouds: isSafari ? LOW_QUALITY_COLOR_CLOUDS : HIGH_QUALITY_COLOR_CLOUDS
+  };
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
+  const activeKeyboardKeys = new Set();
 
   function triggerNote(noteIndex) {
     const key = keyMeshes[noteIndex];
@@ -89,12 +100,13 @@ export function createGoosePianoScene(container) {
     const keyPosition = getKeyTapPoint(key);
     playNote(note, octaveOffset);
     animateKey(key);
-    addColorCloud(scene, particles, note, keyPosition);
+    addColorCloud(scene, particles, particleQuality, note, keyPosition);
     resetGooseHome(goose);
     setGooseTapTarget(goose, keyPosition, noteIndex);
   }
 
   window.addEventListener('pointerdown', (event) => {
+    unlockAudio();
     pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
     pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
     raycaster.setFromCamera(pointer, camera);
@@ -103,6 +115,8 @@ export function createGoosePianoScene(container) {
   });
 
   window.addEventListener('keydown', (event) => {
+    unlockAudio();
+
     if (event.code === 'Space') {
       event.preventDefault();
       startGooseJump(goose);
@@ -115,14 +129,32 @@ export function createGoosePianoScene(container) {
       return;
     }
 
-    const index = KEYBOARD.indexOf(event.key.toLowerCase());
-    if (index !== -1) triggerNote(index);
+    const keyName = event.key.toLowerCase();
+    const index = KEYBOARD.indexOf(keyName);
+    if (index !== -1 && !activeKeyboardKeys.has(keyName)) {
+      activeKeyboardKeys.add(keyName);
+      triggerNote(index);
+    }
   });
 
   window.addEventListener('keyup', (event) => {
+    activeKeyboardKeys.delete(event.key.toLowerCase());
     if (event.key.startsWith('Arrow')) {
       goose.userData.walkKeys.delete(event.key);
     }
+  });
+
+  window.addEventListener('blur', () => {
+    activeKeyboardKeys.clear();
+    goose.userData.walkKeys.clear();
+  });
+
+  window.addEventListener('touchstart', unlockAudio, { passive: true });
+  if (isSafari) window.addEventListener('pagehide', resetAudio);
+  window.addEventListener('pageshow', preloadNotes);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && isSafari) resetAudio();
+    else preloadNotes();
   });
 
   window.addEventListener('resize', () => {
@@ -144,7 +176,8 @@ export function createGoosePianoScene(container) {
 
     if (!loweredPixelRatio && qualitySampleTime >= LOW_FPS_SAMPLE_SECONDS) {
       const averageFps = qualitySampleFrames / qualitySampleTime;
-      if (averageFps < LOW_FPS_THRESHOLD && window.devicePixelRatio > LOW_QUALITY_PIXEL_RATIO) {
+      const lowFpsThreshold = isSafari ? SAFARI_LOW_FPS_THRESHOLD : HIGH_QUALITY_LOW_FPS_THRESHOLD;
+      if (averageFps < lowFpsThreshold && window.devicePixelRatio > LOW_QUALITY_PIXEL_RATIO) {
         renderer.setPixelRatio(LOW_QUALITY_PIXEL_RATIO);
         renderer.setSize(window.innerWidth, window.innerHeight);
         loweredPixelRatio = true;
@@ -254,6 +287,7 @@ function createGoose() {
     group.userData.restNeckPose.upperControl,
     group.userData.restNeckPose.headAnchor
   );
+  group.userData.restNeckGeometryCache = new Map();
 
   group.add(upperBody, leftLeg, rightLeg, leftFoot, rightFoot);
   group.traverse((child) => {
@@ -613,7 +647,7 @@ function animateGoose(goose, time, delta) {
   const headTarget = goose.userData.tapTarget || headBase;
   const headPosition = headBase.lerp(headTarget, tapStrength);
   const yawAngle = clamp(goose.userData.tapYaw || 0, -0.82, 0.82) * lookStrength;
-  const neckPose = hasTap ? getNeckPose(goose, bob, headPosition, tapStrength) : goose.userData.restNeckPose;
+  const neckPose = getNeckPose(goose, bob, headPosition, tapStrength);
   const headAxis = getHeadAxis(neckPose.tangent, tapStrength);
   const headQuaternion = getHeadQuaternion(headAxis, yawAngle);
 
@@ -625,7 +659,8 @@ function animateGoose(goose, time, delta) {
   goose.userData.headPivot.position.copy(headPosition);
   goose.userData.headPivot.quaternion.copy(headQuaternion).multiply(goose.userData.headPivot.userData.baseQuaternion);
 
-  if (hasTap) useCachedTapNeckGeometry(goose, tapProgress, neckPose);
+  if (hasTap) useCachedTapNeckGeometry(goose, tapProgress);
+  else useAnimatedRestNeckGeometry(goose, neckPose, walkAmount, jumpAmount);
   animateWalkingLegs(goose, walkAmount, walkPhase, jumpAmount);
 
   if (hasTap) goose.userData.tapTime += delta;
@@ -636,7 +671,6 @@ function animateGoose(goose, time, delta) {
     goose.userData.tapBodyYaw = 0;
     goose.userData.tapNoteIndex = null;
     goose.userData.upperBody.rotation.y = 0;
-    useNeckGeometry(goose, goose.userData.restNeckGeometry);
   }
 }
 
@@ -732,6 +766,32 @@ function useCachedTapNeckGeometry(goose, tapProgress) {
   useNeckGeometry(goose, noteCache[frameIndex]);
 }
 
+function useAnimatedRestNeckGeometry(goose, neckPose, walkAmount, jumpAmount) {
+  if (walkAmount < 0.01 && jumpAmount < 0.01) {
+    useNeckGeometry(goose, goose.userData.restNeckGeometry);
+    return;
+  }
+
+  const key = [
+    Math.round(neckPose.root.y * 32),
+    Math.round(neckPose.headAnchor.x * 32),
+    Math.round(neckPose.headAnchor.y * 32),
+    Math.round(neckPose.headAnchor.z * 32)
+  ].join(':');
+  const cache = goose.userData.restNeckGeometryCache;
+
+  if (!cache.has(key)) {
+    if (cache.size >= REST_NECK_CACHE_LIMIT) {
+      const oldestKey = cache.keys().next().value;
+      cache.get(oldestKey)?.dispose();
+      cache.delete(oldestKey);
+    }
+    cache.set(key, createCurvedNeckGeometry(neckPose.root, neckPose.lowerControl, neckPose.upperControl, neckPose.headAnchor));
+  }
+
+  useNeckGeometry(goose, cache.get(key));
+}
+
 function useNeckGeometry(goose, geometry) {
   if (!geometry || goose.userData.neck.geometry === geometry) return;
   goose.userData.neck.geometry = geometry;
@@ -750,8 +810,8 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
-function addColorCloud(scene, particles, note, origin) {
-  while (particles.length >= MAX_COLOR_CLOUDS) {
+function addColorCloud(scene, particles, particleQuality, note, origin) {
+  while (particles.length >= particleQuality.maxClouds) {
     disposeParticleCloud(scene, particles.shift());
   }
 
@@ -766,7 +826,7 @@ function addColorCloud(scene, particles, note, origin) {
 
   for (let i = 0; i < 5; i += 1) {
     const radius = 0.52 + Math.random() * 0.28;
-    const puff = new THREE.Mesh(CLOUD_PUFF_GEOMETRY, material.clone());
+    const puff = new THREE.Mesh(particleQuality.geometry, material.clone());
     puff.position.set(
       (Math.random() - 0.5) * 0.7,
       (Math.random() - 0.5) * 0.28,
