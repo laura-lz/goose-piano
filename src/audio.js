@@ -13,8 +13,16 @@ const SOUND_FILES = {
   B: 'B4.mp3'
 };
 
+const IS_IOS_DEVICE =
+  /iP(ad|hone|od)/.test(window.navigator.userAgent) ||
+  (window.navigator.platform === 'MacIntel' && window.navigator.maxTouchPoints > 1);
+const IS_SAFARI = /^((?!chrome|android).)*safari/i.test(window.navigator.userAgent);
+const USE_HTML_AUDIO = IS_IOS_DEVICE && IS_SAFARI;
+const HTML_AUDIO_POOL_SIZE = 4;
+
 const filePromises = new Map();
 const bufferPromises = new Map();
+const htmlAudioPools = new Map();
 const activeNodes = new Set();
 let audioContext;
 let masterGain;
@@ -75,6 +83,25 @@ function resumeAudioContext(context) {
   return resumePromise;
 }
 
+function primeAudioContext(context) {
+  try {
+    const buffer = context.createBuffer(1, 1, 22050);
+    const source = context.createBufferSource();
+    source.buffer = buffer;
+    source.connect(masterGain);
+    source.start(0);
+    source.onended = () => {
+      try {
+        source.disconnect();
+      } catch {
+        // The unlock source is intentionally disposable.
+      }
+    };
+  } catch {
+    // Some browsers reject silent unlock nodes before the audio session is ready.
+  }
+}
+
 function decodeAudioData(context, audioData) {
   return new Promise((resolve, reject) => {
     const promise = context.decodeAudioData(audioData, resolve, reject);
@@ -111,18 +138,67 @@ function loadNoteFile(noteName) {
   return filePromises.get(noteName);
 }
 
+function preloadHtmlNote(noteName) {
+  const fileName = SOUND_FILES[noteName];
+  if (!fileName || htmlAudioPools.has(noteName)) return;
+
+  const pool = Array.from({ length: HTML_AUDIO_POOL_SIZE }, () => {
+    const audio = new Audio(new URL(`sounds/${fileName}`, window.location.href));
+    audio.preload = 'auto';
+    audio.playsInline = true;
+    audio.volume = 0.72;
+    audio.load();
+    return audio;
+  });
+
+  htmlAudioPools.set(noteName, { pool, cursor: 0 });
+}
+
+function playHtmlNote(noteName, octaveOffset = 0) {
+  preloadHtmlNote(noteName);
+
+  const entry = htmlAudioPools.get(noteName);
+  if (!entry) return;
+
+  const audio = entry.pool[entry.cursor];
+  entry.cursor = (entry.cursor + 1) % entry.pool.length;
+
+  audio.pause();
+  audio.currentTime = 0;
+  audio.volume = octaveOffset > 0 ? 0.62 : 0.72;
+  audio.playbackRate = octaveOffset > 0 ? 2 : 1;
+  audio.preservesPitch = false;
+  audio.mozPreservesPitch = false;
+  audio.webkitPreservesPitch = false;
+  audio.play().catch(() => {});
+}
+
 export function preloadNotes() {
-  Object.keys(SOUND_FILES).forEach(loadNoteFile);
+  Object.keys(SOUND_FILES).forEach((noteName) => {
+    loadNoteFile(noteName);
+    if (USE_HTML_AUDIO) preloadHtmlNote(noteName);
+  });
 }
 
 export function unlockAudio() {
+  if (USE_HTML_AUDIO) {
+    Object.keys(SOUND_FILES).forEach(preloadHtmlNote);
+    return Promise.resolve();
+  }
+
   const context = getAudioContext();
   if (!context) return Promise.resolve();
+  primeAudioContext(context);
   Object.keys(SOUND_FILES).forEach(loadNoteBuffer);
   return resumeAudioContext(context);
 }
 
 export function playNote(noteName, octaveOffset = 0) {
+  if (USE_HTML_AUDIO) {
+    playHtmlNote(noteName, octaveOffset);
+    return;
+  }
+
   const context = getAudioContext();
   const bufferPromise = loadNoteBuffer(noteName);
   if (!context || !bufferPromise) return;

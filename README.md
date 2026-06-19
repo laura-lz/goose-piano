@@ -41,6 +41,12 @@ You can also set `GOOSE_PIANO_SYNC_TARGET` as an environment variable instead of
 
 This started as a neat homepage feature for my personal website: a small interactive scene combining a goose, piano notes, and colors corresponding to those notes. It is built from Three.js primitives instead of external 3D models, so the project stays lightweight and easy to embed later.
 
+## Important Notes
+
+- Works best on Google Chrome
+- For Safari browser or browsers with fps below a certain threshold, goose piano adjusts so that shadows are not rendered and pixel ratio is decreased to 1.75:1; this is in order to optimize the actual piano-playing experience (sound- and animation-wise)
+- Chrome and desktop Safari use web audio; mobile Safari uses pooled audio elements
+
 ## Future Improvements
 
 - Skins for different types of geese (e.g. Canadian geese), thanks to my friend Yuqing for mentioning

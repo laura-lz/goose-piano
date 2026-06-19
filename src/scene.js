@@ -30,8 +30,9 @@ const HIGH_QUALITY_CLOUD_PUFF_GEOMETRY = new THREE.SphereGeometry(1, 14, 10);
 const LOW_QUALITY_CLOUD_PUFF_GEOMETRY = new THREE.SphereGeometry(1, 10, 8);
 const NECK_CACHE_STEPS = 18;
 const REST_NECK_CACHE_LIMIT = 80;
+const HEAD_NECK_ANCHOR_OFFSET = new THREE.Vector3(0.08, -0.28, 0);
 const HIGH_QUALITY_PIXEL_RATIO = 2;
-const SAFARI_PIXEL_RATIO = 1.5;
+const SAFARI_PIXEL_RATIO = 1.75;
 const LOW_QUALITY_PIXEL_RATIO = 1.5;
 const HIGH_QUALITY_LOW_FPS_THRESHOLD = 24;
 const SAFARI_LOW_FPS_THRESHOLD = 30;
@@ -150,6 +151,8 @@ export function createGoosePianoScene(container) {
   });
 
   window.addEventListener('touchstart', unlockAudio, { passive: true });
+  window.addEventListener('touchend', unlockAudio, { passive: true });
+  window.addEventListener('click', unlockAudio);
   if (isSafari) window.addEventListener('pagehide', resetAudio);
   window.addEventListener('pageshow', preloadNotes);
   document.addEventListener('visibilitychange', () => {
@@ -660,7 +663,7 @@ function animateGoose(goose, time, delta) {
   goose.userData.headPivot.quaternion.copy(headQuaternion).multiply(goose.userData.headPivot.userData.baseQuaternion);
 
   if (hasTap) useCachedTapNeckGeometry(goose, tapProgress);
-  else useAnimatedRestNeckGeometry(goose, neckPose, walkAmount, jumpAmount);
+  else useAnimatedRestNeckGeometry(goose, neckPose, jumpAmount);
   animateWalkingLegs(goose, walkAmount, walkPhase, jumpAmount);
 
   if (hasTap) goose.userData.tapTime += delta;
@@ -708,7 +711,7 @@ function getNeckPose(goose, bob, headPosition, bendOverride = null) {
   const bendAmount = bendOverride ?? 0;
   root.y += bob * 0.36;
 
-  const headAnchor = headPosition.clone().add(new THREE.Vector3(-0.16, -0.2, 0));
+  const headAnchor = headPosition.clone().add(HEAD_NECK_ANCHOR_OFFSET);
   const lowerControl = root.clone().lerp(headAnchor, 0.24);
   lowerControl.x = THREE.MathUtils.lerp(lowerControl.x, root.x + 0.04, bendAmount * 0.45);
   lowerControl.y += 0.1 + 0.04 * bendAmount;
@@ -766,8 +769,8 @@ function useCachedTapNeckGeometry(goose, tapProgress) {
   useNeckGeometry(goose, noteCache[frameIndex]);
 }
 
-function useAnimatedRestNeckGeometry(goose, neckPose, walkAmount, jumpAmount) {
-  if (walkAmount < 0.01 && jumpAmount < 0.01) {
+function useAnimatedRestNeckGeometry(goose, neckPose, jumpAmount) {
+  if (jumpAmount < 0.01) {
     useNeckGeometry(goose, goose.userData.restNeckGeometry);
     return;
   }
