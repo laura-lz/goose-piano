@@ -39,5 +39,13 @@ canvas {
   background: rgba(255, 255, 255, 0.92);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14);
   cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+  user-select: none;
   -webkit-tap-highlight-color: transparent;
+}
+
+.audio-unlock-button:disabled {
+  cursor: wait;
+  opacity: 0.78;
 }

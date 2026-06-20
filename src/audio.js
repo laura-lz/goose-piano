@@ -17,17 +17,15 @@ const IS_IOS_DEVICE =
   /iP(ad|hone|od)/.test(window.navigator.userAgent) ||
   (window.navigator.platform === 'MacIntel' && window.navigator.maxTouchPoints > 1);
 const IS_SAFARI = /^((?!chrome|android).)*safari/i.test(window.navigator.userAgent);
-const USE_HTML_AUDIO = IS_IOS_DEVICE && IS_SAFARI;
-const HTML_AUDIO_POOL_SIZE = 4;
+const NEEDS_EXPLICIT_UNLOCK = IS_IOS_DEVICE && IS_SAFARI;
 
 const filePromises = new Map();
 const bufferPromises = new Map();
-const htmlAudioPools = new Map();
 const activeNodes = new Set();
 let audioContext;
 let masterGain;
 let resumePromise;
-let htmlAudioUnlocked = false;
+let audioUnlocked = false;
 
 function getAudioContext() {
   if (!audioContext || audioContext.state === 'closed') {
@@ -41,88 +39,6 @@ function getAudioContext() {
   }
 
   return audioContext;
-}
-
-function stopActiveNodes() {
-  activeNodes.forEach(({ source, gain }) => {
-    try {
-      source.onended = null;
-      source.stop();
-    } catch {
-      // The source may already be stopped.
-    }
-    try {
-      source.disconnect();
-      gain.disconnect();
-    } catch {
-      // Safari may already have torn the nodes down while backgrounding the page.
-    }
-  });
-  activeNodes.clear();
-}
-
-export function resetAudio() {
-  stopActiveNodes();
-  bufferPromises.clear();
-  resumePromise = null;
-
-  if (audioContext && audioContext.state !== 'closed') {
-    audioContext.close().catch(() => {});
-  }
-
-  audioContext = null;
-  masterGain = null;
-}
-
-function resumeAudioContext(context) {
-  if (context.state === 'running') return Promise.resolve();
-  if (!resumePromise) {
-    resumePromise = context.resume().catch(() => {}).finally(() => {
-      resumePromise = null;
-    });
-  }
-  return resumePromise;
-}
-
-function primeAudioContext(context) {
-  try {
-    const buffer = context.createBuffer(1, 1, 22050);
-    const source = context.createBufferSource();
-    source.buffer = buffer;
-    source.connect(masterGain);
-    source.start(0);
-    source.onended = () => {
-      try {
-        source.disconnect();
-      } catch {
-        // The unlock source is intentionally disposable.
-      }
-    };
-  } catch {
-    // Some browsers reject silent unlock nodes before the audio session is ready.
-  }
-}
-
-function decodeAudioData(context, audioData) {
-  return new Promise((resolve, reject) => {
-    const promise = context.decodeAudioData(audioData, resolve, reject);
-    if (promise) promise.then(resolve).catch(reject);
-  });
-}
-
-function loadNoteBuffer(noteName) {
-  const fileName = SOUND_FILES[noteName];
-  if (!fileName) return null;
-  if (bufferPromises.has(noteName)) return bufferPromises.get(noteName);
-
-  const context = getAudioContext();
-  if (!context) return null;
-
-  const bufferPromise = loadNoteFile(noteName)
-    .then((audioData) => decodeAudioData(context, audioData.slice(0)));
-
-  bufferPromises.set(noteName, bufferPromise);
-  return bufferPromise;
 }
 
 function loadNoteFile(noteName) {
@@ -139,103 +55,115 @@ function loadNoteFile(noteName) {
   return filePromises.get(noteName);
 }
 
-function preloadHtmlNote(noteName) {
-  const fileName = SOUND_FILES[noteName];
-  if (!fileName || htmlAudioPools.has(noteName)) return;
-
-  const pool = Array.from({ length: HTML_AUDIO_POOL_SIZE }, () => {
-    const audio = new Audio(new URL(`sounds/${fileName}`, window.location.href));
-    audio.preload = 'auto';
-    audio.playsInline = true;
-    audio.volume = 0.72;
-    audio.load();
-    return audio;
+function decodeAudioData(context, audioData) {
+  return new Promise((resolve, reject) => {
+    const promise = context.decodeAudioData(audioData, resolve, reject);
+    if (promise) promise.then(resolve).catch(reject);
   });
-
-  htmlAudioPools.set(noteName, { pool, cursor: 0 });
 }
 
-function playHtmlNote(noteName, octaveOffset = 0) {
-  preloadHtmlNote(noteName);
+function loadNoteBuffer(noteName) {
+  if (bufferPromises.has(noteName)) return bufferPromises.get(noteName);
 
-  const entry = htmlAudioPools.get(noteName);
-  if (!entry) return;
+  const context = getAudioContext();
+  const filePromise = loadNoteFile(noteName);
+  if (!context || !filePromise) return null;
 
-  const audio = entry.pool[entry.cursor];
-  entry.cursor = (entry.cursor + 1) % entry.pool.length;
-
-  audio.pause();
-  audio.currentTime = 0;
-  audio.volume = octaveOffset > 0 ? 0.62 : 0.72;
-  audio.playbackRate = octaveOffset > 0 ? 2 : 1;
-  audio.preservesPitch = false;
-  audio.mozPreservesPitch = false;
-  audio.webkitPreservesPitch = false;
-  audio.play().catch(() => {});
+  const bufferPromise = filePromise.then((audioData) => decodeAudioData(context, audioData.slice(0)));
+  bufferPromises.set(noteName, bufferPromise);
+  return bufferPromise;
 }
 
-function unlockHtmlAudio() {
-  Object.keys(SOUND_FILES).forEach(preloadHtmlNote);
+function resumeAudioContext(context) {
+  if (context.state === 'running') return Promise.resolve();
 
-  const unlocks = [];
-  htmlAudioPools.forEach(({ pool }) => {
-    pool.forEach((audio) => {
-      const previousMuted = audio.muted;
-      const previousVolume = audio.volume;
-
-      audio.muted = true;
-      audio.volume = 0;
-
-      const unlock = audio
-        .play()
-        .then(() => {
-          audio.pause();
-          audio.currentTime = 0;
-        })
-        .catch(() => {})
-        .finally(() => {
-          audio.muted = previousMuted;
-          audio.volume = previousVolume;
-        });
-
-      unlocks.push(unlock);
+  if (!resumePromise) {
+    resumePromise = context.resume().finally(() => {
+      resumePromise = null;
     });
-  });
+  }
 
-  return Promise.allSettled(unlocks).then(() => {
-    htmlAudioUnlocked = true;
+  return resumePromise;
+}
+
+function playUnlockTone(context) {
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  const now = context.currentTime;
+
+  oscillator.type = 'sine';
+  oscillator.frequency.setValueAtTime(523.25, now);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.08, now + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+
+  oscillator.connect(gain);
+  gain.connect(masterGain);
+  oscillator.start(now);
+  oscillator.stop(now + 0.18);
+  oscillator.onended = () => {
+    oscillator.disconnect();
+    gain.disconnect();
+  };
+}
+
+function stopActiveNodes() {
+  activeNodes.forEach(({ source, gain }) => {
+    try {
+      source.onended = null;
+      source.stop();
+    } catch {
+      // The source may already be stopped.
+    }
+
+    try {
+      source.disconnect();
+      gain.disconnect();
+    } catch {
+      // Safari may already have torn the nodes down while backgrounding the page.
+    }
   });
+  activeNodes.clear();
 }
 
 export function preloadNotes() {
-  Object.keys(SOUND_FILES).forEach((noteName) => {
-    loadNoteFile(noteName);
-    if (USE_HTML_AUDIO) preloadHtmlNote(noteName);
-  });
+  Object.keys(SOUND_FILES).forEach(loadNoteFile);
 }
 
 export function needsExplicitAudioUnlock() {
-  return USE_HTML_AUDIO && !htmlAudioUnlocked;
+  return NEEDS_EXPLICIT_UNLOCK && !audioUnlocked;
 }
 
-export function unlockAudio() {
-  if (USE_HTML_AUDIO) {
-    return htmlAudioUnlocked ? Promise.resolve() : unlockHtmlAudio();
+export function resetAudio() {
+  stopActiveNodes();
+  bufferPromises.clear();
+  resumePromise = null;
+  audioUnlocked = false;
+
+  if (audioContext && audioContext.state !== 'closed') {
+    audioContext.close().catch(() => {});
   }
 
+  audioContext = null;
+  masterGain = null;
+}
+
+export function unlockAudio({ audible = false } = {}) {
   const context = getAudioContext();
-  if (!context) return Promise.resolve();
-  primeAudioContext(context);
-  Object.keys(SOUND_FILES).forEach(loadNoteBuffer);
-  return resumeAudioContext(context);
+  if (!context) return Promise.reject(new Error('Web Audio is unavailable.'));
+
+  return resumeAudioContext(context).then(() => {
+    if (context.state !== 'running') {
+      throw new Error(`AudioContext is ${context.state}.`);
+    }
+
+    audioUnlocked = true;
+    if (audible) playUnlockTone(context);
+    Object.keys(SOUND_FILES).forEach(loadNoteBuffer);
+  });
 }
 
 export function playNote(noteName, octaveOffset = 0) {
-  if (USE_HTML_AUDIO) {
-    playHtmlNote(noteName, octaveOffset);
-    return;
-  }
-
   const context = getAudioContext();
   const bufferPromise = loadNoteBuffer(noteName);
   if (!context || !bufferPromise) return;
@@ -243,6 +171,7 @@ export function playNote(noteName, octaveOffset = 0) {
   Promise.all([resumeAudioContext(context), bufferPromise])
     .then(([, buffer]) => {
       if (context.state !== 'running') return;
+      audioUnlocked = true;
 
       const source = context.createBufferSource();
       const gain = context.createGain();
@@ -255,6 +184,7 @@ export function playNote(noteName, octaveOffset = 0) {
 
       source.connect(gain);
       gain.connect(masterGain);
+
       const activeNode = { source, gain };
       activeNodes.add(activeNode);
       source.start(now);
@@ -270,6 +200,6 @@ export function playNote(noteName, octaveOffset = 0) {
       };
     })
     .catch(() => {
-      // Audio decoding can fail if a browser is still settling after the first gesture.
+      // Browsers can still reject audio if the frame lacks permission or user activation.
     });
 }

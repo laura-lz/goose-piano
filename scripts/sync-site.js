@@ -22,6 +22,11 @@ if (!targetPath) {
 
 const target = path.resolve(repoRoot, targetPath);
 
+if (path.basename(target) !== 'goose-piano') {
+  console.error(`Refusing to sync: target must be a folder named "goose-piano", got ${target}`);
+  process.exit(1);
+}
+
 await rm(target, { recursive: true, force: true });
 await mkdir(target, { recursive: true });
 await cp(source, target, { recursive: true });

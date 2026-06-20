@@ -40,6 +40,7 @@ const LOW_FPS_SAMPLE_SECONDS = 2.5;
 
 export function createGoosePianoScene(container) {
   const isSafari = /^((?!chrome|android).)*safari/i.test(window.navigator.userAgent);
+  const requiresExplicitAudioUnlock = needsExplicitAudioUnlock();
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#ffffff');
 
@@ -82,7 +83,7 @@ export function createGoosePianoScene(container) {
   goose.userData.neckGeometryCache = createNeckGeometryCache(goose, keyMeshes);
 
   preloadNotes();
-  if (needsExplicitAudioUnlock()) addAudioUnlockButton(container);
+  if (requiresExplicitAudioUnlock) addAudioUnlockButton(container);
 
   const particles = [];
   const particleQuality = {
@@ -108,7 +109,7 @@ export function createGoosePianoScene(container) {
   }
 
   window.addEventListener('pointerdown', (event) => {
-    unlockAudio();
+    if (!requiresExplicitAudioUnlock) unlockAudio();
     pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
     pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
     raycaster.setFromCamera(pointer, camera);
@@ -117,7 +118,7 @@ export function createGoosePianoScene(container) {
   });
 
   window.addEventListener('keydown', (event) => {
-    unlockAudio();
+    if (!requiresExplicitAudioUnlock) unlockAudio();
 
     if (event.code === 'Space') {
       event.preventDefault();
@@ -151,9 +152,10 @@ export function createGoosePianoScene(container) {
     goose.userData.walkKeys.clear();
   });
 
-  window.addEventListener('touchstart', unlockAudio, { passive: true });
-  window.addEventListener('touchend', unlockAudio, { passive: true });
-  window.addEventListener('click', unlockAudio);
+  if (!requiresExplicitAudioUnlock) {
+    window.addEventListener('touchstart', unlockAudio, { passive: true });
+    window.addEventListener('click', unlockAudio);
+  }
   if (isSafari) window.addEventListener('pagehide', resetAudio);
   window.addEventListener('pageshow', preloadNotes);
   document.addEventListener('visibilitychange', () => {
@@ -201,17 +203,35 @@ function addAudioUnlockButton(container) {
   button.className = 'audio-unlock-button';
   button.type = 'button';
   button.textContent = 'Enable sound';
+  let isEnabling = false;
+
+  const keepTapOnButton = (event) => {
+    event.stopPropagation();
+  };
 
   const enableSound = (event) => {
     event.preventDefault();
     event.stopPropagation();
-    unlockAudio().then(() => {
-      button.remove();
-    });
+    if (isEnabling) return;
+    isEnabling = true;
+    button.disabled = true;
+    button.textContent = 'Enabling...';
+    unlockAudio({ audible: true })
+      .then(() => {
+        button.remove();
+      })
+      .catch(() => {
+        isEnabling = false;
+        button.disabled = false;
+        button.textContent = 'Tap to enable sound';
+      });
   };
 
-  button.addEventListener('click', enableSound);
+  button.addEventListener('pointerdown', keepTapOnButton);
+  button.addEventListener('touchstart', keepTapOnButton, { passive: true });
+  button.addEventListener('pointerup', enableSound);
   button.addEventListener('touchend', enableSound);
+  button.addEventListener('click', enableSound);
   container.appendChild(button);
 }
 
