@@ -24,28 +24,3 @@ body {
 canvas {
   display: block;
 }
-
-.audio-unlock-button {
-  position: absolute;
-  left: 50%;
-  bottom: max(24px, env(safe-area-inset-bottom));
-  z-index: 2;
-  transform: translateX(-50%);
-  border: 1px solid rgba(17, 17, 17, 0.18);
-  border-radius: 999px;
-  padding: 12px 18px;
-  font: 600 16px/1 Georgia, 'Times New Roman', serif;
-  color: #111111;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14);
-  cursor: pointer;
-  pointer-events: auto;
-  touch-action: manipulation;
-  user-select: none;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.audio-unlock-button:disabled {
-  cursor: wait;
-  opacity: 0.78;
-}

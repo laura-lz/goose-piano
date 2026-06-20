@@ -13,19 +13,12 @@ const SOUND_FILES = {
   B: 'B4.mp3'
 };
 
-const IS_IOS_DEVICE =
-  /iP(ad|hone|od)/.test(window.navigator.userAgent) ||
-  (window.navigator.platform === 'MacIntel' && window.navigator.maxTouchPoints > 1);
-const IS_SAFARI = /^((?!chrome|android).)*safari/i.test(window.navigator.userAgent);
-const NEEDS_EXPLICIT_UNLOCK = IS_IOS_DEVICE && IS_SAFARI;
-
 const filePromises = new Map();
 const bufferPromises = new Map();
-const activeNodes = new Set();
 let audioContext;
 let masterGain;
 let resumePromise;
-let audioUnlocked = false;
+let hasPrimedAudio = false;
 
 function getAudioContext() {
   if (!audioContext || audioContext.state === 'closed') {
@@ -33,8 +26,11 @@ function getAudioContext() {
     if (!Context) return null;
 
     audioContext = new Context();
+    if ('audioSession' in window.navigator) {
+      window.navigator.audioSession.type = 'playback';
+    }
     masterGain = audioContext.createGain();
-    masterGain.gain.value = 0.86;
+    masterGain.gain.value = 1;
     masterGain.connect(audioContext.destination);
   }
 
@@ -86,7 +82,7 @@ function resumeAudioContext(context) {
   return resumePromise;
 }
 
-function playUnlockTone(context) {
+function primeAudioGraph(context) {
   const oscillator = context.createOscillator();
   const gain = context.createGain();
   const now = context.currentTime;
@@ -94,71 +90,38 @@ function playUnlockTone(context) {
   oscillator.type = 'sine';
   oscillator.frequency.setValueAtTime(523.25, now);
   gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(0.08, now + 0.01);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
 
   oscillator.connect(gain);
   gain.connect(masterGain);
   oscillator.start(now);
-  oscillator.stop(now + 0.18);
+  oscillator.stop(now + 0.04);
   oscillator.onended = () => {
     oscillator.disconnect();
     gain.disconnect();
   };
 }
 
-function stopActiveNodes() {
-  activeNodes.forEach(({ source, gain }) => {
-    try {
-      source.onended = null;
-      source.stop();
-    } catch {
-      // The source may already be stopped.
-    }
-
-    try {
-      source.disconnect();
-      gain.disconnect();
-    } catch {
-      // Safari may already have torn the nodes down while backgrounding the page.
-    }
-  });
-  activeNodes.clear();
-}
-
 export function preloadNotes() {
   Object.keys(SOUND_FILES).forEach(loadNoteFile);
 }
 
-export function needsExplicitAudioUnlock() {
-  return NEEDS_EXPLICIT_UNLOCK && !audioUnlocked;
-}
-
-export function resetAudio() {
-  stopActiveNodes();
-  bufferPromises.clear();
-  resumePromise = null;
-  audioUnlocked = false;
-
-  if (audioContext && audioContext.state !== 'closed') {
-    audioContext.close().catch(() => {});
-  }
-
-  audioContext = null;
-  masterGain = null;
-}
-
-export function unlockAudio({ audible = false } = {}) {
+export function unlockAudio({ prime = false } = {}) {
   const context = getAudioContext();
   if (!context) return Promise.reject(new Error('Web Audio is unavailable.'));
+
+  if (prime && !hasPrimedAudio) {
+    primeAudioGraph(context);
+  }
 
   return resumeAudioContext(context).then(() => {
     if (context.state !== 'running') {
       throw new Error(`AudioContext is ${context.state}.`);
     }
 
-    audioUnlocked = true;
-    if (audible) playUnlockTone(context);
+    if (prime && !hasPrimedAudio) {
+      primeAudioGraph(context);
+      hasPrimedAudio = true;
+    }
     Object.keys(SOUND_FILES).forEach(loadNoteBuffer);
   });
 }
@@ -171,7 +134,6 @@ export function playNote(noteName, octaveOffset = 0) {
   Promise.all([resumeAudioContext(context), bufferPromise])
     .then(([, buffer]) => {
       if (context.state !== 'running') return;
-      audioUnlocked = true;
 
       const source = context.createBufferSource();
       const gain = context.createGain();
@@ -185,8 +147,6 @@ export function playNote(noteName, octaveOffset = 0) {
       source.connect(gain);
       gain.connect(masterGain);
 
-      const activeNode = { source, gain };
-      activeNodes.add(activeNode);
       source.start(now);
       source.stop(now + Math.min(1.7, buffer.duration + 0.12));
       source.onended = () => {
@@ -196,7 +156,6 @@ export function playNote(noteName, octaveOffset = 0) {
         } catch {
           // Nodes can already be disconnected during page lifecycle cleanup.
         }
-        activeNodes.delete(activeNode);
       };
     })
     .catch(() => {

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { needsExplicitAudioUnlock, playNote, preloadNotes, resetAudio, unlockAudio } from './audio.js';
+import { playNote, preloadNotes, unlockAudio } from './audio.js';
 
 const KEYBOARD = ['a', 'w', 's', 'e', 'd', 'f', 't', 'g', 'y', 'h', 'u', 'j', 'k', 'o', 'l', 'p', ';'];
 const PIANO_NOTES = [
@@ -40,7 +40,6 @@ const LOW_FPS_SAMPLE_SECONDS = 2.5;
 
 export function createGoosePianoScene(container) {
   const isSafari = /^((?!chrome|android).)*safari/i.test(window.navigator.userAgent);
-  const requiresExplicitAudioUnlock = needsExplicitAudioUnlock();
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#ffffff');
 
@@ -83,7 +82,6 @@ export function createGoosePianoScene(container) {
   goose.userData.neckGeometryCache = createNeckGeometryCache(goose, keyMeshes);
 
   preloadNotes();
-  if (requiresExplicitAudioUnlock) addAudioUnlockButton(container);
 
   const particles = [];
   const particleQuality = {
@@ -109,7 +107,7 @@ export function createGoosePianoScene(container) {
   }
 
   window.addEventListener('pointerdown', (event) => {
-    if (!requiresExplicitAudioUnlock) unlockAudio();
+    unlockAudio({ prime: true });
     pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
     pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
     raycaster.setFromCamera(pointer, camera);
@@ -118,7 +116,7 @@ export function createGoosePianoScene(container) {
   });
 
   window.addEventListener('keydown', (event) => {
-    if (!requiresExplicitAudioUnlock) unlockAudio();
+    unlockAudio({ prime: true });
 
     if (event.code === 'Space') {
       event.preventDefault();
@@ -152,15 +150,11 @@ export function createGoosePianoScene(container) {
     goose.userData.walkKeys.clear();
   });
 
-  if (!requiresExplicitAudioUnlock) {
-    window.addEventListener('touchstart', unlockAudio, { passive: true });
-    window.addEventListener('click', unlockAudio);
-  }
-  if (isSafari) window.addEventListener('pagehide', resetAudio);
+  window.addEventListener('touchstart', () => unlockAudio({ prime: true }), { passive: true });
+  window.addEventListener('click', () => unlockAudio({ prime: true }));
   window.addEventListener('pageshow', preloadNotes);
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && isSafari) resetAudio();
-    else preloadNotes();
+    if (!document.hidden) preloadNotes();
   });
 
   window.addEventListener('resize', () => {
@@ -196,43 +190,6 @@ export function createGoosePianoScene(container) {
     controls.update();
     renderer.render(scene, camera);
   });
-}
-
-function addAudioUnlockButton(container) {
-  const button = document.createElement('button');
-  button.className = 'audio-unlock-button';
-  button.type = 'button';
-  button.textContent = 'Enable sound';
-  let isEnabling = false;
-
-  const keepTapOnButton = (event) => {
-    event.stopPropagation();
-  };
-
-  const enableSound = (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (isEnabling) return;
-    isEnabling = true;
-    button.disabled = true;
-    button.textContent = 'Enabling...';
-    unlockAudio({ audible: true })
-      .then(() => {
-        button.remove();
-      })
-      .catch(() => {
-        isEnabling = false;
-        button.disabled = false;
-        button.textContent = 'Tap to enable sound';
-      });
-  };
-
-  button.addEventListener('pointerdown', keepTapOnButton);
-  button.addEventListener('touchstart', keepTapOnButton, { passive: true });
-  button.addEventListener('pointerup', enableSound);
-  button.addEventListener('touchend', enableSound);
-  button.addEventListener('click', enableSound);
-  container.appendChild(button);
 }
 
 function addLights(scene) {
