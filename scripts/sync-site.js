@@ -12,10 +12,10 @@ if (!targetPath) {
     'Missing sync target.',
     '',
     'Usage:',
-    '  npm run sync-site -- ../your-site/assets/goose-piano',
+    '  npm run sync-site -- ../your-site/<yourpath>',
     '',
     'Or:',
-    '  GOOSE_PIANO_SYNC_TARGET=../your-site/assets/goose-piano npm run sync-site'
+    '  GOOSE_PIANO_SYNC_TARGET=../your-site/<yourpath> npm run sync-site'
   ].join('\n'));
   process.exit(1);
 }

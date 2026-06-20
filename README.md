@@ -14,7 +14,7 @@ npm run dev
 After changing the scene, build and copy it into a website folder:
 
 ```bash
-npm run sync-site -- ../your-site/assets/goose-piano
+npm run sync-site -- ../your-site/<yourpath>
 ```
 
 The target folder should be the folder loaded by the website iframe.
