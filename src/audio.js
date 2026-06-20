@@ -27,6 +27,7 @@ const activeNodes = new Set();
 let audioContext;
 let masterGain;
 let resumePromise;
+let htmlAudioUnlocked = false;
 
 function getAudioContext() {
   if (!audioContext || audioContext.state === 'closed') {
@@ -173,6 +174,39 @@ function playHtmlNote(noteName, octaveOffset = 0) {
   audio.play().catch(() => {});
 }
 
+function unlockHtmlAudio() {
+  Object.keys(SOUND_FILES).forEach(preloadHtmlNote);
+
+  const unlocks = [];
+  htmlAudioPools.forEach(({ pool }) => {
+    pool.forEach((audio) => {
+      const previousMuted = audio.muted;
+      const previousVolume = audio.volume;
+
+      audio.muted = true;
+      audio.volume = 0;
+
+      const unlock = audio
+        .play()
+        .then(() => {
+          audio.pause();
+          audio.currentTime = 0;
+        })
+        .catch(() => {})
+        .finally(() => {
+          audio.muted = previousMuted;
+          audio.volume = previousVolume;
+        });
+
+      unlocks.push(unlock);
+    });
+  });
+
+  return Promise.allSettled(unlocks).then(() => {
+    htmlAudioUnlocked = true;
+  });
+}
+
 export function preloadNotes() {
   Object.keys(SOUND_FILES).forEach((noteName) => {
     loadNoteFile(noteName);
@@ -180,10 +214,13 @@ export function preloadNotes() {
   });
 }
 
+export function needsExplicitAudioUnlock() {
+  return USE_HTML_AUDIO && !htmlAudioUnlocked;
+}
+
 export function unlockAudio() {
   if (USE_HTML_AUDIO) {
-    Object.keys(SOUND_FILES).forEach(preloadHtmlNote);
-    return Promise.resolve();
+    return htmlAudioUnlocked ? Promise.resolve() : unlockHtmlAudio();
   }
 
   const context = getAudioContext();

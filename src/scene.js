@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { playNote, preloadNotes, resetAudio, unlockAudio } from './audio.js';
+import { needsExplicitAudioUnlock, playNote, preloadNotes, resetAudio, unlockAudio } from './audio.js';
 
 const KEYBOARD = ['a', 'w', 's', 'e', 'd', 'f', 't', 'g', 'y', 'h', 'u', 'j', 'k', 'o', 'l', 'p', ';'];
 const PIANO_NOTES = [
@@ -82,6 +82,7 @@ export function createGoosePianoScene(container) {
   goose.userData.neckGeometryCache = createNeckGeometryCache(goose, keyMeshes);
 
   preloadNotes();
+  if (needsExplicitAudioUnlock()) addAudioUnlockButton(container);
 
   const particles = [];
   const particleQuality = {
@@ -193,6 +194,25 @@ export function createGoosePianoScene(container) {
     controls.update();
     renderer.render(scene, camera);
   });
+}
+
+function addAudioUnlockButton(container) {
+  const button = document.createElement('button');
+  button.className = 'audio-unlock-button';
+  button.type = 'button';
+  button.textContent = 'Enable sound';
+
+  const enableSound = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    unlockAudio().then(() => {
+      button.remove();
+    });
+  };
+
+  button.addEventListener('click', enableSound);
+  button.addEventListener('touchend', enableSound);
+  container.appendChild(button);
 }
 
 function addLights(scene) {
