@@ -37,6 +37,9 @@ const LOW_QUALITY_PIXEL_RATIO = 1.5;
 const HIGH_QUALITY_LOW_FPS_THRESHOLD = 24;
 const SAFARI_LOW_FPS_THRESHOLD = 30;
 const LOW_FPS_SAMPLE_SECONDS = 2.5;
+const GOOSE_DRAG_DEAD_ZONE = 14;
+const GOOSE_JUMP_FLICK_DISTANCE = 52;
+const GOOSE_JUMP_FLICK_MS = 420;
 
 export function createGoosePianoScene(container) {
   const isSafari = /^((?!chrome|android).)*safari/i.test(window.navigator.userAgent);
@@ -52,6 +55,7 @@ export function createGoosePianoScene(container) {
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = !isSafari;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.domElement.style.touchAction = 'none';
   container.appendChild(renderer.domElement);
 
   const controls = new OrbitControls(camera, renderer.domElement);
@@ -73,6 +77,7 @@ export function createGoosePianoScene(container) {
   goose.userData.walkKeys = new Set();
   goose.userData.keepOutBounds = { minX: -2.05, maxX: 1.75, minZ: -2.8, maxZ: 0.36 };
   scene.add(goose);
+  const gooseMeshes = getTouchableMeshes(goose);
 
   const { piano, keyMeshes } = createPiano();
   piano.position.set(-0.2, 0, -0.9);
@@ -91,6 +96,15 @@ export function createGoosePianoScene(container) {
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
   const activeKeyboardKeys = new Set();
+  const activeGooseDragKeys = new Set();
+  const gooseDrag = {
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    lastX: 0,
+    lastY: 0,
+    startedAt: 0
+  };
 
   function triggerNote(noteIndex) {
     const key = keyMeshes[noteIndex];
@@ -106,13 +120,120 @@ export function createGoosePianoScene(container) {
     setGooseTapTarget(goose, keyPosition, noteIndex);
   }
 
+  function startGooseDrag(event) {
+    gooseDrag.pointerId = event.pointerId;
+    gooseDrag.startX = event.clientX;
+    gooseDrag.startY = event.clientY;
+    gooseDrag.lastX = event.clientX;
+    gooseDrag.lastY = event.clientY;
+    gooseDrag.startedAt = performance.now();
+    controls.enabled = false;
+
+    if (renderer.domElement.setPointerCapture) {
+      try {
+        renderer.domElement.setPointerCapture(event.pointerId);
+      } catch {
+        // Some browsers can reject capture if the pointer lifecycle changed.
+      }
+    }
+  }
+
+  function updateGooseDragWalk() {
+    const deltaX = gooseDrag.lastX - gooseDrag.startX;
+    const deltaY = gooseDrag.lastY - gooseDrag.startY;
+    const nextKeys = new Set();
+
+    if (Math.abs(deltaX) > GOOSE_DRAG_DEAD_ZONE) {
+      nextKeys.add(deltaX > 0 ? 'ArrowRight' : 'ArrowLeft');
+    }
+
+    if (Math.abs(deltaY) > GOOSE_DRAG_DEAD_ZONE) {
+      nextKeys.add(deltaY > 0 ? 'ArrowDown' : 'ArrowUp');
+    }
+
+    setGooseDragKeys(nextKeys);
+  }
+
+  function setGooseDragKeys(nextKeys) {
+    activeGooseDragKeys.forEach((key) => {
+      if (!nextKeys.has(key)) goose.userData.walkKeys.delete(key);
+    });
+
+    nextKeys.forEach((key) => {
+      activeGooseDragKeys.add(key);
+      goose.userData.walkKeys.add(key);
+    });
+
+    activeGooseDragKeys.forEach((key) => {
+      if (!nextKeys.has(key)) activeGooseDragKeys.delete(key);
+    });
+  }
+
+  function finishGooseDrag(event) {
+    gooseDrag.lastX = event.clientX;
+    gooseDrag.lastY = event.clientY;
+
+    const deltaX = gooseDrag.lastX - gooseDrag.startX;
+    const deltaY = gooseDrag.lastY - gooseDrag.startY;
+    const elapsed = performance.now() - gooseDrag.startedAt;
+    const isUpwardFlick = deltaY < -GOOSE_JUMP_FLICK_DISTANCE
+      && elapsed < GOOSE_JUMP_FLICK_MS
+      && Math.abs(deltaY) > Math.abs(deltaX) * 1.2;
+
+    if (isUpwardFlick) startGooseJump(goose);
+    cancelGooseDrag();
+  }
+
+  function cancelGooseDrag() {
+    if (gooseDrag.pointerId === null) return;
+
+    if (renderer.domElement.releasePointerCapture) {
+      try {
+        renderer.domElement.releasePointerCapture(gooseDrag.pointerId);
+      } catch {
+        // Capture may already be released after browser gestures or blur.
+      }
+    }
+
+    setGooseDragKeys(new Set());
+    gooseDrag.pointerId = null;
+    controls.enabled = true;
+  }
+
   window.addEventListener('pointerdown', (event) => {
     unlockAudio({ prime: true });
     pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
     pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
     raycaster.setFromCamera(pointer, camera);
+
+    const canDragGoose = event.pointerType === 'touch' || event.pointerType === 'pen';
+    const gooseHit = canDragGoose ? raycaster.intersectObjects(gooseMeshes, false)[0] : null;
+    if (gooseHit) {
+      event.preventDefault();
+      startGooseDrag(event);
+      return;
+    }
+
     const hit = raycaster.intersectObjects(keyMeshes, false)[0];
     if (hit) triggerNote(hit.object.userData.noteIndex);
+  });
+
+  window.addEventListener('pointermove', (event) => {
+    if (event.pointerId !== gooseDrag.pointerId) return;
+    event.preventDefault();
+    gooseDrag.lastX = event.clientX;
+    gooseDrag.lastY = event.clientY;
+    updateGooseDragWalk();
+  });
+
+  window.addEventListener('pointerup', (event) => {
+    if (event.pointerId !== gooseDrag.pointerId) return;
+    finishGooseDrag(event);
+  });
+
+  window.addEventListener('pointercancel', (event) => {
+    if (event.pointerId !== gooseDrag.pointerId) return;
+    cancelGooseDrag();
   });
 
   window.addEventListener('keydown', (event) => {
@@ -148,6 +269,8 @@ export function createGoosePianoScene(container) {
   window.addEventListener('blur', () => {
     activeKeyboardKeys.clear();
     goose.userData.walkKeys.clear();
+    activeGooseDragKeys.clear();
+    cancelGooseDrag();
   });
 
   window.addEventListener('touchstart', () => unlockAudio({ prime: true }), { passive: true });
@@ -469,6 +592,14 @@ function mesh(geometry, material, position, scale = [1, 1, 1], rotation = [0, 0,
   item.scale.set(...scale);
   item.rotation.set(...rotation);
   return item;
+}
+
+function getTouchableMeshes(group) {
+  const meshes = [];
+  group.traverse((child) => {
+    if (child.isMesh) meshes.push(child);
+  });
+  return meshes;
 }
 
 function animateKey(key) {
