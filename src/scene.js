@@ -29,7 +29,8 @@ const COLOR_CLOUD_TTL = 0.95;
 const HIGH_QUALITY_CLOUD_PUFF_GEOMETRY = new THREE.SphereGeometry(1, 14, 10);
 const LOW_QUALITY_CLOUD_PUFF_GEOMETRY = new THREE.SphereGeometry(1, 10, 8);
 const NECK_CACHE_STEPS = 18;
-const REST_NECK_CACHE_LIMIT = 80;
+const REST_NECK_CACHE_LIMIT = 160;
+const REST_NECK_CACHE_PRECISION = 96;
 const HEAD_NECK_ANCHOR_OFFSET = new THREE.Vector3(-0.16, -0.08, 0);
 const HIGH_QUALITY_PIXEL_RATIO = 2;
 const SAFARI_PIXEL_RATIO = 1.75;
@@ -45,6 +46,8 @@ const JUMP_FOOT_FORWARD_ANGLE = -0.18;
 const JUMP_BODY_UPRIGHT_ANGLE = 0.18;
 const JUMP_BODY_FORWARD_SHIFT = 0.14;
 const JUMP_BODY_EXTRA_LIFT = 0.16;
+const JUMP_NECK_CRANE_FORWARD = 0.42;
+const JUMP_NECK_CRANE_DOWN = 0.14;
 const FOOT_CONTACT_HEIGHT = 0.04;
 
 export function createGoosePianoScene(container) {
@@ -811,6 +814,8 @@ function animateGoose(goose, time, delta) {
   const headBase = goose.userData.headPivot.userData.basePosition.clone();
   headBase.x += Math.sin(walkPhase + Math.PI) * 0.07 * walkAmount;
   headBase.y += bob * 0.62 + Math.max(0, -Math.sin(walkPhase)) * 0.05 * walkAmount + headLag;
+  headBase.x += jumpAmount * JUMP_NECK_CRANE_FORWARD;
+  headBase.y -= jumpAmount * JUMP_NECK_CRANE_DOWN;
   const headTarget = goose.userData.tapTarget || headBase;
   const headPosition = headBase.lerp(headTarget, tapStrength);
   const yawAngle = clamp(goose.userData.tapYaw || 0, -0.82, 0.82) * lookStrength;
@@ -940,10 +945,10 @@ function useAnimatedRestNeckGeometry(goose, neckPose, jumpAmount) {
   }
 
   const key = [
-    Math.round(neckPose.root.y * 32),
-    Math.round(neckPose.headAnchor.x * 32),
-    Math.round(neckPose.headAnchor.y * 32),
-    Math.round(neckPose.headAnchor.z * 32)
+    Math.round(neckPose.root.y * REST_NECK_CACHE_PRECISION),
+    Math.round(neckPose.headAnchor.x * REST_NECK_CACHE_PRECISION),
+    Math.round(neckPose.headAnchor.y * REST_NECK_CACHE_PRECISION),
+    Math.round(neckPose.headAnchor.z * REST_NECK_CACHE_PRECISION)
   ].join(':');
   const cache = goose.userData.restNeckGeometryCache;
 

@@ -14,7 +14,7 @@ npm run dev
 After changing the scene, build and copy it into a website folder:
 
 ```bash
-npm run sync-site -- ../your-site/<yourpath>
+npm run sync-site -- /your-site/yourpath
 ```
 
 The target folder should be the folder loaded by the website iframe.
@@ -45,7 +45,6 @@ This started as a neat homepage feature for my personal website: a small interac
 
 - Works best on Google Chrome
 - For Safari browser or browsers with fps below a certain threshold, goose piano adjusts so that shadows are not rendered and pixel ratio is decreased to 1.75:1; this is in order to optimize the actual piano-playing experience (sound- and animation-wise)
-- Chrome and desktop Safari use web audio; mobile Safari uses pooled audio elements
 
 ## Future Improvements
 
@@ -53,6 +52,5 @@ This started as a neat homepage feature for my personal website: a small interac
 - Make the math behind the goose movement (specifically the neck bending to tap keys) better
 - Upload small JSON or MusicXML files for the goose to play
 - Record clips/songs
-- Make goose movement functional on mobile web
 
 <img width="709" height="594" alt="Screenshot 2026-06-17 at 12 58 20 PM" src="https://github.com/user-attachments/assets/c89aab12-7abf-4acd-a254-6c15e3545c72" />
