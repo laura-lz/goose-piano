@@ -40,6 +40,12 @@ const LOW_FPS_SAMPLE_SECONDS = 2.5;
 const GOOSE_DRAG_DEAD_ZONE = 14;
 const GOOSE_JUMP_FLICK_DISTANCE = 52;
 const GOOSE_JUMP_FLICK_MS = 420;
+const JUMP_FOOT_FORWARD_STRIDE = 0.28;
+const JUMP_FOOT_FORWARD_ANGLE = -0.18;
+const JUMP_BODY_UPRIGHT_ANGLE = 0.18;
+const JUMP_BODY_FORWARD_SHIFT = 0.14;
+const JUMP_BODY_EXTRA_LIFT = 0.16;
+const FOOT_CONTACT_HEIGHT = 0.04;
 
 export function createGoosePianoScene(container) {
   const isSafari = /^((?!chrome|android).)*safari/i.test(window.navigator.userAgent);
@@ -378,6 +384,7 @@ function createGoose() {
 
   const upperBody = new THREE.Group();
   upperBody.add(body, belly, tail, neck, headPivot);
+  upperBody.userData.basePosition = upperBody.position.clone();
 
   const bobParts = [body, belly, tail];
   const walkParts = [leftLeg, rightLeg, leftFoot, rightFoot];
@@ -710,7 +717,9 @@ function updateGooseJump(goose, delta) {
 function resetGooseHome(goose) {
   goose.position.copy(goose.userData.homePosition);
   goose.rotation.y = goose.userData.homeRotationY;
+  goose.userData.upperBody.position.copy(goose.userData.upperBody.userData.basePosition);
   goose.userData.upperBody.rotation.y = 0;
+  goose.userData.upperBody.rotation.z = 0;
   goose.userData.tapTime = 0;
   goose.userData.tapBodyYaw = 0;
   goose.userData.walkKeys.clear();
@@ -720,16 +729,16 @@ function resetGooseHome(goose) {
   goose.userData.isJumping = false;
 }
 
-function animateWalkingLegs(goose, walkAmount, walkPhase, jumpAmount) {
+function animateWalkingLegs(goose, walkAmount, walkPhase, jumpAmount, bodyBob, bodyExtraLift) {
   const { leftLeg, rightLeg, leftFoot, rightFoot } = goose.userData.walkParts;
   const leftStep = Math.max(0, Math.sin(walkPhase)) * walkAmount;
   const rightStep = Math.max(0, -Math.sin(walkPhase)) * walkAmount;
 
-  poseWalkingSide(leftLeg, leftFoot, leftStep, -0.08, jumpAmount);
-  poseWalkingSide(rightLeg, rightFoot, rightStep, 0.08, jumpAmount);
+  poseWalkingSide(goose, leftLeg, leftFoot, leftStep, -0.08, jumpAmount, bodyBob, bodyExtraLift);
+  poseWalkingSide(goose, rightLeg, rightFoot, rightStep, 0.08, jumpAmount, bodyBob, bodyExtraLift);
 }
 
-function poseWalkingSide(leg, foot, stepAmount, outwardTilt, jumpAmount) {
+function poseWalkingSide(goose, leg, foot, stepAmount, outwardTilt, jumpAmount, bodyBob, bodyExtraLift) {
   leg.position.copy(leg.userData.basePosition);
   foot.position.copy(foot.userData.basePosition);
   leg.quaternion.copy(leg.userData.baseQuaternion);
@@ -739,21 +748,42 @@ function poseWalkingSide(leg, foot, stepAmount, outwardTilt, jumpAmount) {
 
   const stride = stepAmount * 0.28;
   const lift = Math.sin(stepAmount * Math.PI) * 0.045;
+  const jumpStride = jumpAmount * JUMP_FOOT_FORWARD_STRIDE;
+  const footForwardAngle = jumpAmount * JUMP_FOOT_FORWARD_ANGLE;
+  const footX = foot.userData.basePosition.x + Math.max(stride, jumpStride);
   const jumpHeight = jumpAmount * 0.58;
   const legBaseHalfHeight = leg.userData.basePosition.y - foot.userData.basePosition.y;
   const baseLegTopY = leg.userData.basePosition.y + legBaseHalfHeight;
-  const legTopY = baseLegTopY + jumpHeight + lift * 0.35;
-  const footY = foot.userData.basePosition.y + jumpHeight * 0.58 + lift;
-  const stretchRatio = (legTopY - footY) / (legBaseHalfHeight * 2);
+  const footY = foot.userData.basePosition.y + jumpHeight * 0.58 + lift + bodyExtraLift;
 
-  foot.position.x += stride;
+  foot.position.x = footX;
   foot.position.y = footY;
-  leg.scale.y = leg.userData.baseScale.y * stretchRatio;
-  leg.position.x = foot.position.x;
-  leg.position.y = (legTopY + footY) / 2;
-  leg.position.z = foot.position.z;
-  leg.rotation.z += outwardTilt * stepAmount;
-  foot.rotation.z += outwardTilt * 0.8 * stepAmount;
+  foot.rotation.z += outwardTilt * 0.8 * stepAmount + footForwardAngle;
+
+  const footContactOffset = new THREE.Vector3(0, FOOT_CONTACT_HEIGHT, 0).applyQuaternion(foot.quaternion);
+  const footContact = foot.position.clone().add(footContactOffset);
+  const hipContact = getBodyLegContactPoint(goose, leg, baseLegTopY, bodyBob);
+  const legVector = hipContact.clone().sub(footContact);
+  const legLength = legVector.length();
+  const baseLegLength = legBaseHalfHeight * 2;
+
+  leg.position.copy(footContact).addScaledVector(legVector, 0.5);
+  leg.scale.y = leg.userData.baseScale.y * (legLength / baseLegLength);
+  leg.quaternion
+    .setFromUnitVectors(new THREE.Vector3(0, 1, 0), legVector.normalize())
+    .multiply(leg.userData.baseQuaternion);
+}
+
+function getBodyLegContactPoint(goose, leg, baseLegTopY, bodyBob) {
+  const upperBody = goose.userData.upperBody;
+  const localContact = new THREE.Vector3(
+    leg.userData.basePosition.x,
+    baseLegTopY + bodyBob,
+    leg.userData.basePosition.z
+  );
+
+  localContact.applyEuler(upperBody.rotation);
+  return localContact.add(upperBody.position);
 }
 
 function animateGoose(goose, time, delta) {
@@ -763,18 +793,24 @@ function animateGoose(goose, time, delta) {
   const hasTap = Boolean(goose.userData.tapTarget);
   const jumpProgress = goose.userData.isJumping ? clamp(goose.userData.jumpTime / 0.72, 0, 1) : 0;
   const jumpHeight = jumpAmount * 0.58;
-  const takeoffLag = -0.12 * Math.sin(clamp(jumpProgress / 0.42, 0, 1) * Math.PI);
-  const peakFloat = 0.1 * Math.sin(clamp((jumpProgress - 0.22) / 0.78, 0, 1) * Math.PI);
-  const headLag = goose.userData.isJumping ? takeoffLag + peakFloat : 0;
+  const neckTakeoff = smoothstep(clamp(jumpProgress / 0.3, 0, 1)) * jumpHeight * 0.18;
+  const neckComebackDelay = Math.sin(clamp((jumpProgress - 0.42) / 0.58, 0, 1) * Math.PI) * 0.08;
+  const headLag = goose.userData.isJumping ? neckTakeoff + neckComebackDelay : 0;
   const bob = Math.sin(time * 1.8) * 0.035 + Math.abs(Math.sin(walkPhase)) * 0.09 * walkAmount + jumpHeight;
+  const bodyForwardShift = jumpAmount * JUMP_BODY_FORWARD_SHIFT;
+  const bodyExtraLift = jumpAmount * JUMP_BODY_EXTRA_LIFT;
   const tapProgress = hasTap ? clamp(goose.userData.tapTime / goose.userData.tapDuration, 0, 1) : 0;
   const tapStrength = hasTap ? getTapStrength(tapProgress) : 0;
   const bodyTurnStrength = hasTap ? getTapStrength(clamp(tapProgress + 0.14, 0, 1)) : 0;
+  goose.userData.upperBody.position.copy(goose.userData.upperBody.userData.basePosition);
+  goose.userData.upperBody.position.x += bodyForwardShift;
+  goose.userData.upperBody.position.y += bodyExtraLift;
   goose.userData.upperBody.rotation.y = clamp(goose.userData.tapBodyYaw || 0, -0.22, 0.22) * bodyTurnStrength;
+  goose.userData.upperBody.rotation.z = jumpAmount * JUMP_BODY_UPRIGHT_ANGLE;
   const lookStrength = hasTap ? smoothstep(clamp(tapProgress / 0.18, 0, 1)) : 0;
   const headBase = goose.userData.headPivot.userData.basePosition.clone();
   headBase.x += Math.sin(walkPhase + Math.PI) * 0.07 * walkAmount;
-  headBase.y += bob * 0.5 + Math.max(0, -Math.sin(walkPhase)) * 0.05 * walkAmount + headLag;
+  headBase.y += bob * 0.62 + Math.max(0, -Math.sin(walkPhase)) * 0.05 * walkAmount + headLag;
   const headTarget = goose.userData.tapTarget || headBase;
   const headPosition = headBase.lerp(headTarget, tapStrength);
   const yawAngle = clamp(goose.userData.tapYaw || 0, -0.82, 0.82) * lookStrength;
@@ -792,7 +828,7 @@ function animateGoose(goose, time, delta) {
 
   if (hasTap) useCachedTapNeckGeometry(goose, tapProgress);
   else useAnimatedRestNeckGeometry(goose, neckPose, jumpAmount);
-  animateWalkingLegs(goose, walkAmount, walkPhase, jumpAmount);
+  animateWalkingLegs(goose, walkAmount, walkPhase, jumpAmount, bob, bodyExtraLift);
 
   if (hasTap) goose.userData.tapTime += delta;
   if (hasTap && goose.userData.tapTime >= goose.userData.tapDuration) {
@@ -837,7 +873,7 @@ function getTapStrength(progress) {
 function getNeckPose(goose, bob, headPosition, bendOverride = null) {
   const root = goose.userData.neckRoot.clone();
   const bendAmount = bendOverride ?? 0;
-  root.y += bob * 0.36;
+  root.y += bob;
 
   const headAnchor = headPosition.clone().add(HEAD_NECK_ANCHOR_OFFSET);
   const lowerControl = root.clone().lerp(headAnchor, 0.24);
