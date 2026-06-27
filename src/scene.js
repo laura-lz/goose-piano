@@ -29,8 +29,7 @@ const COLOR_CLOUD_TTL = 0.95;
 const HIGH_QUALITY_CLOUD_PUFF_GEOMETRY = new THREE.SphereGeometry(1, 14, 10);
 const LOW_QUALITY_CLOUD_PUFF_GEOMETRY = new THREE.SphereGeometry(1, 10, 8);
 const NECK_CACHE_STEPS = 18;
-const REST_NECK_CACHE_LIMIT = 160;
-const REST_NECK_CACHE_PRECISION = 96;
+const JUMP_NECK_CACHE_STEPS = 28;
 const HEAD_NECK_ANCHOR_OFFSET = new THREE.Vector3(-0.16, -0.08, 0);
 const HIGH_QUALITY_PIXEL_RATIO = 2;
 const SAFARI_PIXEL_RATIO = 1.75;
@@ -43,11 +42,11 @@ const GOOSE_JUMP_FLICK_DISTANCE = 52;
 const GOOSE_JUMP_FLICK_MS = 420;
 const JUMP_FOOT_FORWARD_STRIDE = 0.28;
 const JUMP_FOOT_FORWARD_ANGLE = -0.18;
-const JUMP_BODY_UPRIGHT_ANGLE = 0.18;
 const JUMP_BODY_FORWARD_SHIFT = 0.14;
 const JUMP_BODY_EXTRA_LIFT = 0.16;
-const JUMP_NECK_CRANE_FORWARD = 0.42;
-const JUMP_NECK_CRANE_DOWN = 0.14;
+const JUMP_NECK_CRANE_FORWARD = 0.3;
+const JUMP_NECK_CRANE_DOWN = 0.12;
+const JUMP_HEAD_LEVEL_STRENGTH = 0.86;
 const FOOT_CONTACT_HEIGHT = 0.04;
 
 export function createGoosePianoScene(container) {
@@ -94,6 +93,7 @@ export function createGoosePianoScene(container) {
   scene.updateMatrixWorld(true);
 
   goose.userData.neckGeometryCache = createNeckGeometryCache(goose, keyMeshes);
+  goose.userData.jumpNeckGeometryCache = createJumpNeckGeometryCache(goose);
 
   preloadNotes();
 
@@ -420,7 +420,6 @@ function createGoose() {
     group.userData.restNeckPose.upperControl,
     group.userData.restNeckPose.headAnchor
   );
-  group.userData.restNeckGeometryCache = new Map();
 
   group.add(upperBody, leftLeg, rightLeg, leftFoot, rightFoot);
   group.traverse((child) => {
@@ -732,16 +731,16 @@ function resetGooseHome(goose) {
   goose.userData.isJumping = false;
 }
 
-function animateWalkingLegs(goose, walkAmount, walkPhase, jumpAmount, bodyBob, bodyExtraLift) {
+function animateWalkingLegs(goose, walkAmount, walkPhase, jumpAmount, jumpProgress, bodyBob, bodyExtraLift) {
   const { leftLeg, rightLeg, leftFoot, rightFoot } = goose.userData.walkParts;
   const leftStep = Math.max(0, Math.sin(walkPhase)) * walkAmount;
   const rightStep = Math.max(0, -Math.sin(walkPhase)) * walkAmount;
 
-  poseWalkingSide(goose, leftLeg, leftFoot, leftStep, -0.08, jumpAmount, bodyBob, bodyExtraLift);
-  poseWalkingSide(goose, rightLeg, rightFoot, rightStep, 0.08, jumpAmount, bodyBob, bodyExtraLift);
+  poseWalkingSide(goose, leftLeg, leftFoot, leftStep, -0.08, jumpAmount, jumpProgress, bodyBob, bodyExtraLift);
+  poseWalkingSide(goose, rightLeg, rightFoot, rightStep, 0.08, jumpAmount, jumpProgress, bodyBob, bodyExtraLift);
 }
 
-function poseWalkingSide(goose, leg, foot, stepAmount, outwardTilt, jumpAmount, bodyBob, bodyExtraLift) {
+function poseWalkingSide(goose, leg, foot, stepAmount, outwardTilt, jumpAmount, jumpProgress, bodyBob, bodyExtraLift) {
   leg.position.copy(leg.userData.basePosition);
   foot.position.copy(foot.userData.basePosition);
   leg.quaternion.copy(leg.userData.baseQuaternion);
@@ -809,7 +808,7 @@ function animateGoose(goose, time, delta) {
   goose.userData.upperBody.position.x += bodyForwardShift;
   goose.userData.upperBody.position.y += bodyExtraLift;
   goose.userData.upperBody.rotation.y = clamp(goose.userData.tapBodyYaw || 0, -0.22, 0.22) * bodyTurnStrength;
-  goose.userData.upperBody.rotation.z = jumpAmount * JUMP_BODY_UPRIGHT_ANGLE;
+  goose.userData.upperBody.rotation.z = 0;
   const lookStrength = hasTap ? smoothstep(clamp(tapProgress / 0.18, 0, 1)) : 0;
   const headBase = goose.userData.headPivot.userData.basePosition.clone();
   headBase.x += Math.sin(walkPhase + Math.PI) * 0.07 * walkAmount;
@@ -820,7 +819,8 @@ function animateGoose(goose, time, delta) {
   const headPosition = headBase.lerp(headTarget, tapStrength);
   const yawAngle = clamp(goose.userData.tapYaw || 0, -0.82, 0.82) * lookStrength;
   const neckPose = getNeckPose(goose, bob, headPosition, tapStrength);
-  const headAxis = getHeadAxis(neckPose.tangent, tapStrength);
+  const jumpHeadLevelStrength = hasTap ? 0 : smoothstep(jumpAmount) * JUMP_HEAD_LEVEL_STRENGTH;
+  const headAxis = getHeadAxis(neckPose.tangent, tapStrength, jumpHeadLevelStrength);
   const headQuaternion = getHeadQuaternion(headAxis, yawAngle);
 
   goose.userData.bobParts.forEach((part) => {
@@ -832,8 +832,8 @@ function animateGoose(goose, time, delta) {
   goose.userData.headPivot.quaternion.copy(headQuaternion).multiply(goose.userData.headPivot.userData.baseQuaternion);
 
   if (hasTap) useCachedTapNeckGeometry(goose, tapProgress);
-  else useAnimatedRestNeckGeometry(goose, neckPose, jumpAmount);
-  animateWalkingLegs(goose, walkAmount, walkPhase, jumpAmount, bob, bodyExtraLift);
+  else useCachedJumpNeckGeometry(goose, jumpProgress, jumpAmount);
+  animateWalkingLegs(goose, walkAmount, walkPhase, jumpAmount, jumpProgress, bob, bodyExtraLift);
 
   if (hasTap) goose.userData.tapTime += delta;
   if (hasTap && goose.userData.tapTime >= goose.userData.tapDuration) {
@@ -881,23 +881,27 @@ function getNeckPose(goose, bob, headPosition, bendOverride = null) {
   root.y += bob;
 
   const headAnchor = headPosition.clone().add(HEAD_NECK_ANCHOR_OFFSET);
-  const lowerControl = root.clone().lerp(headAnchor, 0.24);
-  lowerControl.x = THREE.MathUtils.lerp(lowerControl.x, root.x + 0.04, bendAmount * 0.45);
-  lowerControl.y += 0.1 + 0.04 * bendAmount;
-  lowerControl.z = THREE.MathUtils.lerp(lowerControl.z, headAnchor.z * 0.14, bendAmount * 0.55);
+  const lowerControl = root.clone().lerp(headAnchor, 0.12);
+  lowerControl.x = THREE.MathUtils.lerp(lowerControl.x, root.x + 0.02, bendAmount * 0.65);
+  lowerControl.y += 0.24 + 0.02 * bendAmount;
+  lowerControl.z = THREE.MathUtils.lerp(lowerControl.z, headAnchor.z * 0.04, bendAmount * 0.75);
 
-  const upperControl = root.clone().lerp(headAnchor, 0.86);
-  upperControl.x -= 0.34 * bendAmount;
-  upperControl.y += 0.42 * bendAmount;
-  upperControl.z = THREE.MathUtils.lerp(upperControl.z, headAnchor.z * 0.82, bendAmount * 0.9);
+  const upperControl = root.clone().lerp(headAnchor, 0.82);
+  upperControl.x -= 0.22 * bendAmount;
+  upperControl.y += 0.34 * bendAmount;
+  upperControl.z = THREE.MathUtils.lerp(upperControl.z, headAnchor.z * 0.9, bendAmount * 0.9);
 
   const curve = new THREE.CubicBezierCurve3(root, lowerControl, upperControl, headAnchor);
   const tangent = curve.getTangent(1).normalize();
   return { root, lowerControl, upperControl, headAnchor, tangent };
 }
 
-function getHeadAxis(neckTangent, tapStrength) {
-  return neckTangent.clone().lerp(new THREE.Vector3(-0.18, 1, 0), 0.22 * tapStrength).normalize();
+function getHeadAxis(neckTangent, tapStrength, jumpLevelStrength = 0) {
+  return neckTangent
+    .clone()
+    .lerp(new THREE.Vector3(-0.18, 1, 0), 0.22 * tapStrength)
+    .lerp(new THREE.Vector3(0, 1, 0), jumpLevelStrength)
+    .normalize();
 }
 
 function getHeadQuaternion(headAxis, yawAngle) {
@@ -930,6 +934,31 @@ function createNeckGeometryCache(goose, keyMeshes) {
   });
 }
 
+function createJumpNeckGeometryCache(goose) {
+  return Array.from({ length: JUMP_NECK_CACHE_STEPS }, (_, step) => {
+    const progress = step / (JUMP_NECK_CACHE_STEPS - 1);
+    const jumpAmount = Math.sin(progress * Math.PI);
+    const neckPose = getJumpNeckPose(goose, progress, jumpAmount);
+    return createCurvedNeckGeometry(neckPose.root, neckPose.lowerControl, neckPose.upperControl, neckPose.headAnchor);
+  });
+}
+
+function getJumpNeckPose(goose, jumpProgress, jumpAmount) {
+  if (jumpAmount < 0.01) return goose.userData.restNeckPose;
+
+  const jumpHeight = jumpAmount * 0.58;
+  const neckTakeoff = smoothstep(clamp(jumpProgress / 0.3, 0, 1)) * jumpHeight * 0.18;
+  const neckComebackDelay = Math.sin(clamp((jumpProgress - 0.42) / 0.58, 0, 1) * Math.PI) * 0.08;
+  const headBase = goose.userData.headPivot.userData.basePosition.clone();
+  const bob = jumpHeight;
+
+  headBase.y += bob * 0.62 + neckTakeoff + neckComebackDelay;
+  headBase.x += jumpAmount * JUMP_NECK_CRANE_FORWARD;
+  headBase.y -= jumpAmount * JUMP_NECK_CRANE_DOWN;
+
+  return getNeckPose(goose, bob, headBase, 0);
+}
+
 function useCachedTapNeckGeometry(goose, tapProgress) {
   const noteCache = goose.userData.neckGeometryCache?.[goose.userData.tapNoteIndex];
   if (!noteCache?.length) return;
@@ -938,30 +967,17 @@ function useCachedTapNeckGeometry(goose, tapProgress) {
   useNeckGeometry(goose, noteCache[frameIndex]);
 }
 
-function useAnimatedRestNeckGeometry(goose, neckPose, jumpAmount) {
+function useCachedJumpNeckGeometry(goose, jumpProgress, jumpAmount) {
   if (jumpAmount < 0.01) {
     useNeckGeometry(goose, goose.userData.restNeckGeometry);
     return;
   }
 
-  const key = [
-    Math.round(neckPose.root.y * REST_NECK_CACHE_PRECISION),
-    Math.round(neckPose.headAnchor.x * REST_NECK_CACHE_PRECISION),
-    Math.round(neckPose.headAnchor.y * REST_NECK_CACHE_PRECISION),
-    Math.round(neckPose.headAnchor.z * REST_NECK_CACHE_PRECISION)
-  ].join(':');
-  const cache = goose.userData.restNeckGeometryCache;
+  const cache = goose.userData.jumpNeckGeometryCache;
+  if (!cache?.length) return;
 
-  if (!cache.has(key)) {
-    if (cache.size >= REST_NECK_CACHE_LIMIT) {
-      const oldestKey = cache.keys().next().value;
-      cache.get(oldestKey)?.dispose();
-      cache.delete(oldestKey);
-    }
-    cache.set(key, createCurvedNeckGeometry(neckPose.root, neckPose.lowerControl, neckPose.upperControl, neckPose.headAnchor));
-  }
-
-  useNeckGeometry(goose, cache.get(key));
+  const frameIndex = Math.min(cache.length - 1, Math.round(clamp(jumpProgress, 0, 1) * (cache.length - 1)));
+  useNeckGeometry(goose, cache[frameIndex]);
 }
 
 function useNeckGeometry(goose, geometry) {
